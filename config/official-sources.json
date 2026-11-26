@@ -1,0 +1,96 @@
+{
+  "schema_version": 1,
+  "purpose": "用于完整日报草案的公开官方 RSS／Atom 候选来源；不是完整新闻、行情、一致预期或经济日历数据集。",
+  "verification_file": "../outputs/source-http-verification.json",
+  "enabled_means": "仅为来源配置；不代表工作流已启用、已完成编辑或已授权发信。",
+  "sources": [
+    {
+      "id": "fed_press",
+      "name": "Federal Reserve Board — press releases",
+      "url": "https://www.federalreserve.gov/feeds/press_all.xml",
+      "feed_kind": "rss",
+      "section": "macro",
+      "max_items_per_run": 30,
+      "coverage_notes": "美联储官方政策、监管及其他新闻公告。条目通常提供原始公告链接和发布时间；不提供市场一致预期或完整宏观日历。",
+      "enabled": true
+    },
+    {
+      "id": "fed_research",
+      "name": "Federal Reserve Board — working papers",
+      "url": "https://www.federalreserve.gov/feeds/working_papers.xml",
+      "feed_kind": "rss",
+      "section": "quant_research",
+      "max_items_per_run": 20,
+      "coverage_notes": "美联储工作论文发布线索。包括宏观、金融研究，并非全部与量化投资直接相关；论文摘要不是全文，结论仍需阅读原文核实。",
+      "enabled": true
+    },
+    {
+      "id": "arxiv_qfin",
+      "name": "arXiv — quantitative finance",
+      "url": "https://rss.arxiv.org/rss/q-fin",
+      "feed_kind": "rss",
+      "section": "quant_research",
+      "max_items_per_run": 30,
+      "coverage_notes": "量化金融预印本与修订线索。此次样本有条目 pubDate；不要把预印本表述为同行评议结论，也不要仅凭标题推荐或编写研究结论。",
+      "enabled": true
+    },
+    {
+      "id": "sec_8k",
+      "name": "SEC EDGAR — latest 8-K filings",
+      "url": "https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent&type=8-K&owner=exclude&count=40&output=atom",
+      "feed_kind": "atom",
+      "section": "company",
+      "max_items_per_run": 10,
+      "coverage_notes": "全市场最新 8-K 披露事件，噪声较多；须按公司范围与重大程度筛选。本次查询最多返回40项，不能当成当天完整档案。Atom updated 是披露记录更新时间；财报实际值须核对原文件，不提供一致预期。遵守 SEC 自动访问要求，不绕过限流或封禁。",
+      "enabled": true
+    },
+    {
+      "id": "apple_newsroom",
+      "name": "Apple — Newsroom",
+      "url": "https://www.apple.com/newsroom/rss-feed.rss",
+      "feed_kind": "atom",
+      "section": "company",
+      "max_items_per_run": 15,
+      "coverage_notes": "Apple 官方公司新闻，包含产品、服务及活动，相关性需筛选。该 .rss 地址本次实际返回 Atom；样本使用条目 updated。覆盖 Apple 自身，不覆盖全部美股。",
+      "enabled": true
+    },
+    {
+      "id": "nvidia_newsroom",
+      "name": "NVIDIA — news releases",
+      "url": "https://nvidianews.nvidia.com/releases.xml",
+      "feed_kind": "rss",
+      "section": "company",
+      "max_items_per_run": 15,
+      "coverage_notes": "NVIDIA 官方新闻与发布稿，包括产品及生态消息。样本体积约432KB；仅摘录关联事实并链接原文，不能把公司宣传或 RSS 摘要当成完整独立报道。",
+      "enabled": true
+    },
+    {
+      "id": "nasdaq_ir",
+      "name": "Nasdaq, Inc. — investor relations releases",
+      "url": "https://ir.nasdaq.com/rss/news-releases.xml",
+      "feed_kind": "rss",
+      "section": "company",
+      "max_items_per_run": 15,
+      "coverage_notes": "Nasdaq, Inc.（NDAQ）公司自身 IR 公告，包括部分交易所统计发布；不是全部纳斯达克上市公司新闻或市场行情源。",
+      "enabled": true
+    },
+    {
+      "id": "bls_latest",
+      "name": "U.S. Bureau of Labor Statistics — latest numbers",
+      "url": "https://www.bls.gov/feed/bls_latest.rss",
+      "feed_kind": "rss",
+      "section": "macro",
+      "max_items_per_run": 15,
+      "coverage_notes": "美国劳工统计局官方最新指标与发布页面线索，可能包含汇总项。具体指标、统计期间、公布时点及修订值需核对原始发布；不提供一致预期。",
+      "enabled": true
+    }
+  ],
+  "constraints": [
+    "只读取公开 feed 元数据与源提供的节选，不绕过付费墙、登录限制或站点访问限制。",
+    "HTTP 200 和可解析 XML 不构成全文转载许可，也不表示条目中的事实已交叉核验。",
+    "保留来源链接与原始日期。缺失或不精确日期单列待核实，不以抓取时刻代替发布日期。",
+    "max_items_per_run 需由消费者实际执行；本文件本身不采集、筛选或发送内容。",
+    "美股初始覆盖有限。Apple、NVIDIA 与 NDAQ 只是初始公司来源，不能宣称覆盖整个美股市场。"
+  ]
+}
+

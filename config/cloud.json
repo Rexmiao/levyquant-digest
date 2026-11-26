@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "title": "LevyQuant Daily News Digest",
+  "language": "en",
+  "preserve_original_chinese_titles": true,
+  "timezone": "America/New_York",
+  "target_trigger_time": "07:00",
+  "edition": "Morning Edition",
+  "model": "gemini-3.5-flash-lite",
+  "lookback_hours": 48,
+  "max_items_per_source": 30,
+  "fetch_timeout_seconds": 20,
+  "max_enriched_articles": 30,
+  "source_manifest": "config/official-sources.json",
+  "max_source_characters": 150000,
+  "max_output_tokens": 16000,
+  "history_days": 14,
+  "coverage_notices": [
+    "Coverage currently consists of selected official releases, SEC filing notices and research abstracts. It is not a comprehensive market news wire.",
+    "Consensus estimates, verified market quotes, full earnings-call transcripts and authenticated social feeds are not yet connected. Missing figures and calendar events are omitted."
+  ]
+}

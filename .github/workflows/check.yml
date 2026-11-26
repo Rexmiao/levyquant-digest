@@ -1,0 +1,73 @@
+name: LevyQuant Offline Checks
+
+"on":
+  push:
+    paths:
+      - 'levyquant/**'
+      - 'tests/**'
+      - 'tools/editor-output.schema.json'
+      - 'agent.prompt.md'
+      - 'config/cloud.json'
+      - 'config/official-sources.json'
+      - 'requirements-cloud.txt'
+      - '.github/workflows/**'
+  pull_request:
+    paths:
+      - 'levyquant/**'
+      - 'tests/**'
+      - 'tools/editor-output.schema.json'
+      - 'agent.prompt.md'
+      - 'config/cloud.json'
+      - 'config/official-sources.json'
+      - 'requirements-cloud.txt'
+      - '.github/workflows/**'
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    if: >-
+      ${{ github.repository == 'Rexmiao/levyquant-digest' &&
+          github.repository_owner == 'Rexmiao' &&
+          github.event.repository.fork == false &&
+          (github.event_name != 'workflow_dispatch' || github.actor == 'Rexmiao') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 18
+    env:
+      PYTHONUTF8: '1'
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+      - name: Check personal repository scope
+        env:
+          REPOSITORY_IS_FORK: ${{ github.event.repository.fork }}
+        run: |
+          if [[ "$GITHUB_REPOSITORY" != 'Rexmiao/levyquant-digest' ||
+                "$GITHUB_REPOSITORY_OWNER" != 'Rexmiao' ||
+                "$REPOSITORY_IS_FORK" != 'false' ]]; then
+            printf '%s\n' '::error::Checks are restricted to the original personal repository.'
+            exit 1
+          fi
+          if [[ "$GITHUB_EVENT_NAME" == 'workflow_dispatch' && "$GITHUB_ACTOR" != 'Rexmiao' ]]; then
+            printf '%s\n' '::error::Only the repository owner may dispatch checks.'
+            exit 1
+          fi
+
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Set up Python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.12'
+          check-latest: false
+
+      - name: Install pinned cloud dependencies
+        run: python -m pip install --disable-pip-version-check -r requirements-cloud.txt
+
+      - name: Run offline unit tests
+        run: python -m unittest discover -s tests -v

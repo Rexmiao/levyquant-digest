@@ -1,0 +1,141 @@
+name: LevyQuant Daily Digest
+
+"on":
+  schedule:
+    - cron: '0 7 * * *'
+      timezone: America/New_York
+  workflow_dispatch:
+    inputs:
+      run_mode:
+        description: Preview locally on runner, email a draft to self, send the digest, or test SMTP to self
+        type: choice
+        required: true
+        default: preview
+        options:
+          - preview
+          - preview-email
+          - send
+          - smtp-test
+
+# The state API needs write access only in this workflow's delivery job.
+permissions: {}
+
+concurrency:
+  group: levyquant-delivery
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  daily:
+    name: Collect, validate, and run the selected mode
+    if: >-
+      ${{ github.repository == 'Rexmiao/levyquant-digest' &&
+          github.repository_owner == 'Rexmiao' &&
+          github.event.repository.fork == false &&
+          ((github.event_name == 'workflow_dispatch' && github.actor == 'Rexmiao') ||
+           (github.event_name == 'schedule' && vars.DIGEST_ENABLED == 'true')) }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 18
+    permissions:
+      contents: write
+    env:
+      PYTHONUTF8: '1'
+      PYTHONDONTWRITEBYTECODE: '1'
+      DIGEST_ENABLED: ${{ vars.DIGEST_ENABLED }}
+      GEMINI_FREE_TIER_CONFIRMED: ${{ vars.GEMINI_FREE_TIER_CONFIRMED }}
+      RUN_MODE: ${{ github.event_name == 'schedule' && 'send' || inputs.run_mode || 'preview' }}
+    steps:
+      - name: Check repository scope, selected mode, and delivery switches
+        env:
+          REPOSITORY_IS_FORK: ${{ github.event.repository.fork }}
+        run: |
+          if [[ "$GITHUB_REPOSITORY" != 'Rexmiao/levyquant-digest' ||
+                "$GITHUB_REPOSITORY_OWNER" != 'Rexmiao' ||
+                "$REPOSITORY_IS_FORK" != 'false' ]]; then
+            printf '%s\n' '::error::This workflow is restricted to the original personal repository.'
+            exit 1
+          fi
+          if [[ "$GITHUB_EVENT_NAME" == 'workflow_dispatch' && "$GITHUB_ACTOR" != 'Rexmiao' ]]; then
+            printf '%s\n' '::error::Only the repository owner may dispatch this workflow.'
+            exit 1
+          fi
+          case "$RUN_MODE" in
+            preview|preview-email|smtp-test)
+              ;;
+            send)
+              if [[ "$DIGEST_ENABLED" != 'true' ]]; then
+                printf '%s\n' '::error::Sending requires the repository variable DIGEST_ENABLED=true.'
+                exit 1
+              fi
+              ;;
+            *)
+              printf '%s\n' '::error::Unsupported run mode.'
+              exit 1
+              ;;
+          esac
+          if [[ "$RUN_MODE" != 'smtp-test' && "$GEMINI_FREE_TIER_CONFIRMED" != 'true' ]]; then
+            printf '%s\n' '::error::Model operations require GEMINI_FREE_TIER_CONFIRMED=true for an unbilled free-tier project.'
+            exit 1
+          fi
+
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Set up Python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.12'
+          check-latest: false
+
+      - name: Install pinned cloud dependencies
+        run: python -m pip install --disable-pip-version-check -r requirements-cloud.txt
+
+      - name: Run offline unit tests before any model or SMTP operation
+        run: python -m unittest discover -s tests -v
+
+      - name: Run the digest command
+        env:
+          # GITHUB_REPOSITORY is supplied by GitHub; no separate account login.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
+          SMTP_APP_PASSWORD: ${{ secrets.SMTP_APP_PASSWORD }}
+          DIGEST_RECIPIENTS: ${{ secrets.DIGEST_RECIPIENTS }}
+          STATE_ENCRYPTION_KEY: ${{ secrets.STATE_ENCRYPTION_KEY }}
+        run: python -m levyquant.daily --mode "$RUN_MODE" --config config/cloud.json
+
+      - name: Publish safe run metadata
+        if: ${{ always() }}
+        run: |
+          python - <<'PY'
+          import os
+          from pathlib import Path
+
+          summary_limit = 1024 * 1024
+          target = Path(os.environ['GITHUB_STEP_SUMMARY'])
+          used = target.stat().st_size if target.exists() else 0
+          available = max(0, summary_limit - used)
+          metadata_file = Path('outputs/run-summary.md')
+          if metadata_file.exists() and metadata_file.stat().st_size < available - 1024:
+              metadata = metadata_file.read_text(encoding='utf-8').rstrip() + '\n'
+          elif metadata_file.exists():
+              metadata = 'Run metadata exceeded the step-summary size limit; it was not truncated or published.\n'
+          else:
+              metadata = 'No run summary was produced. Review the job step status.\n'
+
+          content = metadata
+          if len(content.encode('utf-8')) > available:
+              content = 'Step-summary size limit reached; metadata and preview were not truncated or published.\n'
+          if len(content.encode('utf-8')) <= available:
+              with target.open('a', encoding='utf-8', newline='\n') as summary:
+                  summary.write(content)
+          PY
+          # Public summaries contain safe metadata only. Full drafts are never published.
+          # Preview-email sends a draft to SMTP_USERNAME only, through the CLI.
+          # Recipient lists, credentials, state files, and draft artifacts are not uploaded.

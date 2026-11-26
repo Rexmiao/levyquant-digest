@@ -1,0 +1,66 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "LevyQuant grounded editorial output",
+  "description": "Select and summarize supplied articles only. No URLs or new financial values. Empty sections are permitted. Evidence quotes must be copied from the cited input article.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["sections"],
+  "properties": {
+    "sections": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "items"],
+        "properties": {
+          "id": {
+            "type": "string",
+            "enum": ["macro_calendar", "geopolitics_macro", "earnings", "sec_filings", "company_sector", "quant_research", "kol_watch", "china_hk", "podcasts_long_reads", "upcoming_events", "watchlist"]
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["title", "summary", "analysis", "source_ids", "evidence", "event_time"],
+              "properties": {
+                "title": {"type": "string", "description": "Concise title; preserve an original Chinese title when appropriate. No URL."},
+                "summary": {"type": "string", "description": "Source-attributed facts only. No newly calculated numbers or unsupported detail. No URL."},
+                "analysis": {"type": "string", "description": "Separate editorial interpretation and uncertainty; empty when unnecessary. No new numeric claims or URL."},
+                "source_ids": {"type": "array", "items": {"type": "string"}},
+                "evidence": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["source_id", "quote"],
+                    "properties": {
+                      "source_id": {"type": "string"},
+                      "quote": {"type": "string", "description": "Exact relevant excerpt from this input article's title, summary or content."}
+                    }
+                  }
+                },
+                "event_time": {
+                  "description": "Null unless an event_time record was supplied on a cited article. Copy its value, precision and status exactly; publication time is not event time.",
+                  "anyOf": [
+                    {"type": "null"},
+                    {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": ["value", "precision", "status"],
+                      "properties": {
+                        "value": {"type": "string"},
+                        "precision": {"type": "string", "enum": ["datetime", "day", "month", "quarter", "half", "year", "unknown"]},
+                        "status": {"type": "string", "enum": ["confirmed", "estimated", "rumor", "unknown"]}
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

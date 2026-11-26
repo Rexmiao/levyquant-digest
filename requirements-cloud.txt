@@ -1,0 +1,3 @@
+# Authenticated encryption for durable state in a public repository.
+# No LLM SDK, browser runtime, GPU or paid runner is required.
+cryptography==50.0.2
