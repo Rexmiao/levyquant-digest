@@ -88,5 +88,5 @@ python -c "import base64,secrets; print(base64.urlsafe_b64encode(secrets.token_b
 ## 运行边界
 
 - **时间**：07:00 是计划触发目标，采集、生成与投递还需要时间。GitHub 高负载时可能延迟或丢弃定时任务，整点尤其繁忙，没有准点到达保证。工作流须在默认分支；公开仓库 60 天没有仓库活动时，定时工作流可能自动停用，应检查 Actions 中的启用状态。[调度说明](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#schedule)
-- **内容**：英文正文为主，保留中文原文标题，采用完整分栏，重点为宏观、美股与量化研究，综合新闻只收重大事项。当前来源主要为 Fed、BLS、SEC、arXiv 和少数公司公告；少数公司的官方新闻不能代表全市场。尚无完整实时行情、一致预期、付费新闻或完整经济日历，缺失时标明或省略，不让模型补造。
+- **内容**：英文正文为主，保留中文原文标题，采用完整分栏，重点为宏观、美股与量化研究，综合新闻只收重大事项。默认 `config/friend-sources.json` 包含20个来源：Fed、BLS、SEC、arXiv、NVIDIA 等官方来源，CNBC、WSJ、SCMP、Digitimes、雷峰网、爱范儿的公开订阅源，以及朋友邮件中的5个播客。媒体只用feed提供的标题/节选，播客只用节目介绍，不下载音频；这不是完整市场覆盖。Reuters授权内容、Finnhub日历、实时行情、一致预期及经过授权的X/雪球/微信公众号尚未接入，缺失内容省略，不让模型补造。
 - **部署状态**：代码已发布、Secrets 已保存、模型可调用、云端 SMTP 可用和每日计划已启用是不同阶段。以仓库当前代码、运行结果及实际邮件确认完成情况，不能仅凭备用部署包存在或本机测试成功判断云端已上线。
