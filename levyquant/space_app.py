@@ -19,6 +19,7 @@ from urllib.parse import urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 from . import daily
+from .editor import EditorError, EditorValidationError
 from .state_store import GitHubStateStore, LocalStateStore, StateConflict, StateError
 from .subscriptions import SubscriptionError, validate_email, validate_public_base_url
 
@@ -30,12 +31,43 @@ PUBLIC_PATH = "public/latest.json"
 _WORKFLOWS = frozenset(("daily-digest.yml", "subscription-mail.yml"))
 _FIELDS = ("date", "subject", "html", "text")
 _PUBLIC_MUTATIONS = frozenset(("/api/subscribe", "/api/confirm", "/api/unsubscribe"))
+_EDITOR_ISSUE_CODES = frozenset((
+    "schema_type", "schema_enum", "missing_field", "unexpected_field",
+    "invalid_articles", "invalid_source", "duplicate_source_id", "unsafe_source_url",
+    "missing_source_metadata", "duplicate_section", "invalid_item_text",
+    "model_url_not_allowed", "unknown_or_missing_source", "duplicate_citation",
+    "evidence_source_mismatch", "unsupported_evidence", "citation_without_evidence",
+    "unsupported_numeric_claim", "financial_value_not_upstream_verified",
+    "unsupported_precise_date", "invalid_event_time", "event_time_not_upstream_verified",
+    "calendar_needs_confirmed_date", "watchlist_needs_time_window", "duplicate_item",
+))
 
 
 class AppError(RuntimeError):
     def __init__(self, status: int, code: str):
         super().__init__(code)
         self.status, self.code = status, code
+
+
+def _private_error_details(error: Exception) -> dict:
+    """Fixed diagnostic vocabulary; never expose messages, reports or class names."""
+    categories = ((EditorValidationError, "EditorValidationError"), (EditorError, "EditorError"),
+                  (SubscriptionError, "SubscriptionError"), (StateConflict, "StateConflict"),
+                  (StateError, "StateError"), (daily.ConfigurationError, "ConfigurationError"),
+                  (AppError, "AppError"))
+    error_type = next((label for category, label in categories if isinstance(error, category)),
+                      "UnexpectedError")
+    result = {"error_type": error_type}
+    if isinstance(error, EditorValidationError):
+        report = error.report
+        errors = report.get("errors") if isinstance(report, dict) else None
+        if isinstance(errors, list):
+            result["issue_codes"] = sorted({issue["code"] for issue in errors[:1000]
+                if isinstance(issue, dict) and isinstance(issue.get("code"), str)
+                and issue["code"] in _EDITOR_ISSUE_CODES})
+    # EditorError currently carries no structured HTTP status. Do not recover
+    # status or any other diagnostic by parsing exception/provider text.
+    return result
 
 
 class _PublicRateLimiter:
@@ -252,13 +284,16 @@ class SpaceApplication:
         return result
 
     def _run_preview(self) -> None:
+        stage = "preview_setup"
         try:
             environment = {key: self.environment[key] for key in ("GEMINI_API_KEY", "GEMINI_FREE_TIER_CONFIRMED")
                            if key in self.environment}
             config = daily.read_json(ROOT / "config/cloud.json")
             with tempfile.TemporaryDirectory(prefix="levyquant-preview-") as directory:
                 output = Path(directory)
+                stage = "preview_pipeline"
                 result = self._preview_runner(config, "preview", environment, output)
+                stage = "edition_validation"
                 if (not isinstance(result, dict) or result.get("mode") != "preview"
                         or result.get("status") != "preview_ready_no_mail_sent"
                         or not re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}", str(result.get("date", "")))):
@@ -271,10 +306,11 @@ class SpaceApplication:
             with self._preview_lock:
                 self._generated_preview = deepcopy(preview)
                 self._preview_state = {"status": "ready", "preview": preview}
-        except Exception:
+        except Exception as error:
             with self._preview_lock:
                 self._generated_preview = None
-                self._preview_state = {"status": "failed", "error": "preview_failed"}
+                self._preview_state = {"status": "failed", "error": "preview_failed",
+                                       "error_stage": stage, **_private_error_details(error)}
 
     def _start_preview(self) -> tuple[int, dict]:
         if (not self.environment.get("GEMINI_API_KEY")
@@ -346,7 +382,14 @@ class SpaceApplication:
                 raise AppError(503, "temporarily_unavailable")
             return 200, {"status": result["status"]}
         if method == "GET" and path == "/api/admin/subscribers":
-            return 200, {"subscribers": self._new_subscription_service().list_subscribers()}
+            stage = "subscription_service_init"
+            try:
+                service = self._new_subscription_service()
+                stage = "subscriber_registry_read"
+                return 200, {"subscribers": service.list_subscribers()}
+            except StateError as error:
+                return 503, {"error": "state_unavailable", "error_stage": stage,
+                             "state_error_type": _private_error_details(error)["error_type"]}
         if method == "POST" and path == "/api/admin/subscribers":
             _body_fields(body, {"id", "action"})
             if body.get("action") != "suppress":

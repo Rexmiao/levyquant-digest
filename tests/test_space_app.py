@@ -12,6 +12,7 @@ import unittest
 from unittest.mock import Mock, patch
 
 from levyquant import daily, space_app
+from levyquant.editor import EditorError, EditorValidationError
 from levyquant.state_store import LocalStateStore, StateConflict, StateError
 from levyquant.subscriptions import SubscriptionError
 
@@ -264,9 +265,60 @@ class AppTests(unittest.TestCase):
         self.assert_error(409, lambda: self.request("POST", "/api/admin/publish", {}))
         self.request("POST", "/api/admin/preview", {})
         self.wait_preview()
-        self.assertEqual(self.request("GET", "/api/admin/preview")[1], {"status": "failed", "error": "preview_failed"})
+        self.assertEqual(self.request("GET", "/api/admin/preview")[1],
+                         {"status": "failed", "error": "preview_failed",
+                          "error_type": "UnexpectedError", "error_stage": "preview_pipeline"})
         self.assert_error(409, lambda: self.request("POST", "/api/admin/publish", {}))
         self.store.save.assert_not_called()
+
+    def test_preview_validation_diagnostics_whitelist_codes_and_hide_report(self):
+        sensitive = "private@example.org https://provider.example/?key=offline-private-token"
+        error = EditorValidationError({"errors": [
+            {"code": "unsupported_numeric_claim", "message": sensitive, "path": sensitive},
+            {"code": "unsupported_precise_date", "message": sensitive},
+            {"code": "unsupported_numeric_claim"}, {"code": sensitive}],
+            "editor_output": {"private": sensitive}})
+        self.app = self.make_app(preview_runner=Mock(side_effect=error))
+        captured_out, captured_err = StringIO(), StringIO()
+        with redirect_stdout(captured_out), redirect_stderr(captured_err):
+            self.app._run_preview()
+        _, result = self.request("GET", "/api/admin/preview")
+        self.assertEqual(result, {"status": "failed", "error": "preview_failed",
+            "error_type": "EditorValidationError", "error_stage": "preview_pipeline",
+            "issue_codes": ["unsupported_numeric_claim", "unsupported_precise_date"]})
+        self.assertNotIn(sensitive, json.dumps(result))
+        self.assertEqual(captured_out.getvalue() + captured_err.getvalue(), "")
+        self.assertFalse(self.app.public_preview()["available"])
+        self.store.save.assert_not_called()
+
+    def test_preview_editor_and_unknown_errors_never_parse_sensitive_message_or_type(self):
+        sensitive = "private@example.org https://provider.example/?token=offline-private-token HTTP 429"
+        injected_type = type("private_provider_class_name", (RuntimeError,), {})
+        for error, expected in ((EditorError(sensitive), "EditorError"),
+                                (injected_type(sensitive), "UnexpectedError")):
+            with self.subTest(expected=expected):
+                self.app = self.make_app(preview_runner=Mock(side_effect=error))
+                self.app._run_preview()
+                _, result = self.request("GET", "/api/admin/preview")
+                self.assertEqual(result["error_type"], expected)
+                self.assertEqual(set(result), {"status", "error", "error_type", "error_stage"})
+                self.assertNotIn("private", json.dumps(result))
+
+    def test_subscriber_state_diagnostics_distinguish_init_and_registry_after_auth(self):
+        sensitive = "private@example.org https://provider.example/?token=offline-private-token"
+        self.service_factory.side_effect = StateError(sensitive)
+        status, result = self.request("GET", "/api/admin/subscribers")
+        self.assertEqual((status, result), (503, {"error": "state_unavailable",
+            "state_error_type": "StateError", "error_stage": "subscription_service_init"}))
+        self.service_factory.side_effect = None
+        self.service.list_subscribers.side_effect = StateConflict(sensitive)
+        status, result = self.request("GET", "/api/admin/subscribers")
+        self.assertEqual((status, result), (503, {"error": "state_unavailable",
+            "state_error_type": "StateConflict", "error_stage": "subscriber_registry_read"}))
+        self.assertNotIn("private", json.dumps(result))
+        before = self.service_factory.call_count
+        self.assert_error(401, lambda: self.request("GET", "/api/admin/subscribers", authorization=None))
+        self.assertEqual(self.service_factory.call_count, before)
 
     def test_publish_reloads_before_bounded_cas_retry(self):
         self.app._preview_state = {"status": "ready", "preview": deepcopy(PREVIEW)}

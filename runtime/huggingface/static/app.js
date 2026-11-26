@@ -19,7 +19,7 @@
     }
     if (!response.ok) {
       if (admin && response.status === 401) logout();
-      const err = new Error(response.status === 401 ? '管理员凭据不正确。' : response.status === 429 ? '操作较频繁，请稍后再试。' : response.status === 503 ? '服务配置尚未完成。' : '操作未完成，请检查配置后重试。');
+      const err = new Error(response.status === 401 ? '管理员凭据不正确。' : response.status === 429 ? '操作较频繁，请稍后再试。' : response.status === 503 ? '服务暂不可用，请查看后台状态。' : '操作未完成，请检查配置后重试。');
       err.status = response.status;
       throw err;
     }
@@ -120,8 +120,9 @@
       row.append(email, state, action); tbody.append(row);
     }
   }
-  function renderRuns(items) {
+  function renderRuns(items, unavailable = false) {
     $('runs-list').replaceChildren();
+    if (unavailable) { $('runs-list').textContent = '运行记录暂时无法读取，请稍后刷新。'; return; }
     if (!items.length) { $('runs-list').textContent = '暂无可显示的运行记录。'; return; }
     for (const run of items) {
       const row = document.createElement('div'); row.className = 'run-item';
@@ -132,10 +133,18 @@
     }
   }
   async function refreshAdmin() {
-    const [status, list] = await Promise.all([api('/api/admin/status', {admin: true}), api('/api/admin/subscribers', {admin: true})]);
+    const status = await api('/api/admin/status', {admin: true});
     $('admin-status').textContent = Array.isArray(status.missing) && status.missing.length ? `待配置：${status.missing.join('、')}` : '后台已连接。可管理订阅、预览和发送任务。';
-    renderRuns(Array.isArray(status.runs) ? status.runs : []);
-    renderSubscribers(Array.isArray(list.subscribers) ? list.subscribers : []);
+    renderRuns(Array.isArray(status.runs) ? status.runs : [], !!status.runs_error);
+    try {
+      const list = await api('/api/admin/subscribers', {admin: true});
+      renderSubscribers(Array.isArray(list.subscribers) ? list.subscribers : []);
+    } catch (error) {
+      if (error.stale || error.status !== 503) throw error;
+      $('subscribers-body').replaceChildren();
+      $('subscriber-count').textContent = '订阅名单暂时无法读取';
+      $('admin-status').textContent += ' 订阅状态读取失败，请稍后重试。';
+    }
   }
   async function pollPreview(attempt = 0) {
     try {
