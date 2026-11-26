@@ -40,6 +40,7 @@ _EDITOR_ISSUE_CODES = frozenset((
     "unsupported_numeric_claim", "financial_value_not_upstream_verified",
     "unsupported_precise_date", "invalid_event_time", "event_time_not_upstream_verified",
     "calendar_needs_confirmed_date", "watchlist_needs_time_window", "duplicate_item",
+    "headline_only_expansion",
 ))
 
 

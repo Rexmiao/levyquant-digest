@@ -320,6 +320,9 @@ def _feed_limit(source: dict) -> int:
 
 
 def _fetch_source(source: dict, timeout: int) -> list[dict]:
+    if source.get("kind") == "moomoo_search":
+        from .moomoo import fetch_moomoo_source
+        return fetch_moomoo_source(source, timeout)
     limit = _feed_limit(source)
     source_url = _clean_url(str(source.get("url") or ""))
     if not source_url:

@@ -401,6 +401,48 @@ class CollectFeedTests(unittest.TestCase):
         self.assertEqual(diagnostics[0]["parsed"], 0)
         self.assertTrue(any("unsupported feed" in warning for warning in warnings))
 
+    @patch("levyquant.moomoo.fetch_moomoo_source")
+    @patch("levyquant.feeds.urlopen")
+    def test_news_search_reuses_time_window_and_canonical_cross_source_deduplication(self, open_url, search):
+        provider = {"id": "search", "name": "Headline search", "kind": "moomoo_search",
+                    "url": "https://ai-news-search.moomoo.com/news_search", "queries": ["Example"]}
+        open_url.return_value = Response(rss(item("Original publisher", "https://example.com/shared")))
+        search.return_value = parse_feed(rss(
+            item("Search duplicate", "https://example.com/shared?utm_source=search")
+            + item("Search exclusive", "https://example.com/exclusive")
+            + item("Old search item", "https://example.com/old-search", "Tue, 24 Nov 2026 10:00:00 GMT")
+            + item("Future search item", "https://example.com/future-search", "Wed, 25 Nov 2026 12:00:01 GMT")
+            + item("Undated search item", "https://example.com/undated-search", "")), provider)
+        reports = []
+        articles, warnings = self.collect([SOURCE, provider], diagnostics=reports)
+        self.assertEqual({row["title"] for row in articles}, {"Original publisher", "Search exclusive"})
+        self.assertEqual(reports[1]["status"], "ok")
+        self.assertEqual((reports[1]["parsed"], reports[1]["dated"], reports[1]["eligible"], reports[1]["selected"]),
+                         (5, 4, 2, 1))
+        self.assertEqual((reports[1]["unknown_dates"], reports[1]["future_dated"]), (1, 1))
+        self.assertTrue(warnings)
+        self.assertEqual(open_url.call_count, 1)
+        self.assertEqual(search.call_count, 1)
+        self.assertEqual(search.call_args.args[0], provider)
+
+    @patch("levyquant.moomoo.fetch_moomoo_source")
+    @patch("levyquant.feeds.urlopen")
+    def test_news_search_failure_does_not_abort_other_sources_or_look_like_empty_success(self, open_url, search):
+        provider = {**SOURCE, "id": "search", "name": "Headline search", "kind": "moomoo_search"}
+        open_url.return_value = Response(rss(item()))
+        search.side_effect = RuntimeError("provider_request_rejected")
+        reports = []
+        articles, warnings = self.collect([SOURCE, provider], diagnostics=reports)
+        self.assertEqual(len(articles), 1)
+        self.assertEqual(reports[1]["status"], "failed")
+        self.assertTrue(any("provider_request_rejected" in warning for warning in warnings))
+        search.side_effect = None
+        search.return_value = []
+        reports = []
+        articles, _ = self.collect([provider], diagnostics=reports)
+        self.assertEqual(articles, [])
+        self.assertEqual(reports[0]["status"], "empty_feed")
+
     @patch("levyquant.feeds.urlopen")
     def test_rfc_negative_zero_respects_window_and_future_exclusion(self, open_url):
         open_url.return_value = Response(rss(item("current", "https://example.com/current", "Wed, 25 Nov 2026 10:00:00 -0000")

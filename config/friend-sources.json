@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "purpose": "Verified public feeds from the reference newsletter's publisher and podcast channels, supplemented by selected official macro, filing and research sources.",
+  "purpose": "Verified reference-newsletter feeds and selected official sources, supplemented by official Moomoo headline discovery.",
   "verified_on": "2026-11-26",
   "lookback_hours": 48,
   "enabled_means": "Eligible for collection; not a guarantee of current items, full coverage, independent verification or permission to republish full articles.",
@@ -255,21 +255,59 @@
       "max_feed_bytes": 8388608,
       "coverage_notes": "Public Chinese episode descriptions/show notes only; retain original title. No audio download, listening or claim of transcript access.",
       "enabled": true
+    },
+    {
+      "id": "moomoo_news_search",
+      "name": "Moomoo News Search",
+      "url": "https://ai-news-search.moomoo.com/news_search",
+      "publisher_page": "https://www.moomoo.com/skillhub/news_search",
+      "kind": "moomoo_search",
+      "section": "company_sector",
+      "queries": [
+        "NVIDIA",
+        "Microsoft",
+        "Federal Reserve"
+      ],
+      "search_size": 4,
+      "language": "en",
+      "max_items_per_run": 6,
+      "retrieval": "feed_excerpt_only",
+      "coverage_notes": "Official public news search contributes source headlines, publication timestamps and explicit source links only. No account, OpenD, article-body request, image download or inferred summary. Deduplicate against earlier publisher records by canonical source URL.",
+      "enabled": true
     }
   ],
   "pending_sources": [
-    {"name": "Reuters", "reason": "No reliable free publisher-direct RSS/API was verified; authorized licensed access is required."},
-    {"name": "Finnhub earnings calendar", "reason": "Not enabled: API key and external-newsletter data-use entitlement have not been verified."},
-    {"name": "Finnhub economic calendar", "reason": "Not enabled: documented premium access is outside the free deployment scope."},
-    {"name": "36Kr", "reason": "Official RSS endpoints returned HTML rather than usable XML in the verification."},
-    {"name": "Yicai", "reason": "No publisher-direct public RSS was verified."},
-    {"name": "X, Xueqiu and WeChat", "reason": "Authenticated access and suitable data-use permissions are not connected; website RSS is not authorization for these platforms."}
+    {
+      "name": "Reuters",
+      "reason": "No reliable free publisher-direct RSS/API was verified; authorized licensed access is required."
+    },
+    {
+      "name": "Finnhub earnings calendar",
+      "reason": "Not enabled: API key and external-newsletter data-use entitlement have not been verified."
+    },
+    {
+      "name": "Finnhub economic calendar",
+      "reason": "Not enabled: documented premium access is outside the free deployment scope."
+    },
+    {
+      "name": "36Kr",
+      "reason": "Official RSS endpoints returned HTML rather than usable XML in the verification."
+    },
+    {
+      "name": "Yicai",
+      "reason": "No publisher-direct public RSS was verified."
+    },
+    {
+      "name": "X, Xueqiu and WeChat",
+      "reason": "Authenticated access and suitable data-use permissions are not connected; website RSS is not authorization for these platforms."
+    }
   ],
   "constraints": [
     "Collect only items with usable source dates in the rolling 48-hour window; preserve source date precision and timezone metadata.",
     "Publisher feeds and podcasts are feed_excerpt_only: never fetch article bodies or audio, solve access challenges or bypass paywalls.",
     "Public RSS and HTTP success do not establish full-text republication rights or independently verify source claims.",
     "Deduplicate overlapping feeds and select for macroeconomics, U.S. equities and quantitative research; omit empty sections instead of filling quotas.",
-    "Retain links and attribution. No consensus, financial value, event date or transcript may be invented from headline-only material."
+    "Retain links and attribution. No consensus, financial value, event date or transcript may be invented from headline-only material.",
+    "Moomoo headline-only items may be selected and categorized, but not expanded into inferred summaries or analysis; original titles and the normal financial-evidence checks are retained."
   ]
 }

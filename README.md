@@ -88,5 +88,5 @@ python -c "import base64,secrets; print(base64.urlsafe_b64encode(secrets.token_b
 ## 运行边界
 
 - **时间**：07:00 是计划触发目标，采集、生成与投递还需要时间。GitHub 高负载时可能延迟或丢弃定时任务，整点尤其繁忙，没有准点到达保证。工作流须在默认分支；公开仓库 60 天没有仓库活动时，定时工作流可能自动停用，应检查 Actions 中的启用状态。[调度说明](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#schedule)
-- **内容**：英文正文为主，保留中文原文标题，采用完整分栏，重点为宏观、美股与量化研究，综合新闻只收重大事项。默认 `config/friend-sources.json` 包含20个来源：Fed、BLS、SEC、arXiv、NVIDIA 等官方来源，CNBC、WSJ、SCMP、Digitimes、雷峰网、爱范儿的公开订阅源，以及朋友邮件中的5个播客。媒体只用feed提供的标题/节选，播客只用节目介绍，不下载音频；这不是完整市场覆盖。Reuters授权内容、Finnhub日历、实时行情、一致预期及经过授权的X/雪球/微信公众号尚未接入，缺失内容省略，不让模型补造。
+- **内容**：英文正文为主，保留中文原文标题，采用完整分栏，重点为宏观、美股与量化研究，综合新闻只收重大事项。默认 `config/friend-sources.json` 包含21个来源：Fed、BLS、SEC、arXiv、NVIDIA 等官方来源，CNBC、WSJ、SCMP、Digitimes、雷峰网、爱范儿的公开订阅源，以及朋友邮件中的5个播客。另有 Moomoo 官方 News Search，默认检索 NVIDIA、Microsoft 与 Federal Reserve，按时间选取最多6条候选；仅保留标题、明确的来源时间和原始链接。媒体只用feed提供的标题/节选，播客只用节目介绍，不下载音频；这不是完整市场覆盖。Reuters授权内容、Finnhub日历、实时行情、一致预期及经过授权的X/雪球/微信公众号尚未接入，缺失内容省略，不让模型补造。
 - **部署状态**：代码已发布、Secrets 已保存、模型可调用、云端 SMTP 可用和每日计划已启用是不同阶段。以仓库当前代码、运行结果及实际邮件确认完成情况，不能仅凭备用部署包存在或本机测试成功判断云端已上线。

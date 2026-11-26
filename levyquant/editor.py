@@ -24,6 +24,7 @@ DEFAULT_MODEL = "gemini-3.5-flash-lite"
 MAX_OUTPUT_TOKENS = 16384
 MAX_RESPONSE_BYTES = 2_000_000
 MAX_REQUEST_BYTES = 750_000
+HEADLINE_ONLY_SUMMARY = "Headline only; open the original source for details."
 SECTION_IDS = (
     "macro_calendar", "geopolitics_macro", "earnings", "sec_filings", "company_sector",
     "quant_research", "kol_watch", "china_hk", "podcasts_long_reads", "upcoming_events", "watchlist",
@@ -69,6 +70,12 @@ unprovided spoken statements. Describe the advertised topics as the episode
 description's claims. An official_abstract is not a full paper or a replication.
 Publisher headlines and feed excerpts are attributed source reports, not
 independently verified full-article evidence. Do not add unprovided body detail.
+For an item based only on media_type=headline_only inputs, cite exactly one
+source and copy its original title exactly. Set summary to exactly:
+"Headline only; open the original source for details."
+Set analysis to the empty string and event_time to null. Select and categorize
+these source headlines only; never infer summaries or causes from them. Skip
+headlines which cannot satisfy the unchanged financial-number evidence rules.
 Unless an article has matching upstream verified_numbers, omit financial amounts,
 percentages, estimates, performance metrics and other financial numeric claims.
 Other method/sample numbers also need exact quoted evidence. Do not calculate
@@ -134,6 +141,7 @@ _OMITTABLE_ITEM_ERRORS = frozenset({
     "financial_value_not_upstream_verified", "unsupported_precise_date",
     "invalid_event_time", "event_time_not_upstream_verified",
     "calendar_needs_confirmed_date", "watchlist_needs_time_window", "duplicate_item",
+    "headline_only_expansion",
 })
 _ITEM_ERROR_PATH = re.compile(
     r"editor_output\.sections\[(\d+)\]\.items\[(\d+)\](?:\.(?:title|summary|analysis))?"
@@ -389,6 +397,14 @@ def validate_editor(editor: object, articles: list[dict]) -> dict:
                     _issue(errors, "unknown_or_missing_source", path, "Every item must reference existing article IDs.")
                 if len(source_ids) != len(set(source_ids)):
                     _issue(errors, "duplicate_citation", path, "Do not repeat source IDs within an item.")
+                cited = [index[source_id] for source_id in source_ids if source_id in index]
+                if (cited and len(cited) == len(source_ids)
+                        and all(article.get("media_type") == "headline_only" for article in cited)):
+                    if (len(source_ids) != 1 or _text(item["title"]) != _text(cited[0].get("title"))
+                            or _text(item["summary"]) != HEADLINE_ONLY_SUMMARY
+                            or _text(item["analysis"]) or item["event_time"] is not None):
+                        _issue(errors, "headline_only_expansion", path,
+                               "Headline-only items must reproduce one source title without inferred summary or analysis.")
                 quotes: dict[str, list[str]] = {}
                 for proof in item["evidence"]:
                     source_id, quote = proof["source_id"], _norm(proof["quote"])

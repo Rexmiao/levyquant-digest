@@ -172,6 +172,18 @@ class EnrichmentTests(unittest.TestCase):
         self.assertTrue(any("TimeoutError" in warning for warning in warnings))
 
     @patch("levyquant.sources.build_opener")
+    def test_search_headlines_preserve_scope_without_requesting_the_source_page(self, build):
+        value = article("https://www.apple.com/newsroom/discovery", summary="")
+        value.update(title="A source headline", retrieval="feed_excerpt_only",
+                     content_scope="search_headline_and_link", media_type="headline_only")
+        enriched, warnings = enrich_articles([value])
+        self.assertEqual(enriched[0]["source_text"], "A source headline")
+        self.assertEqual(enriched[0]["content_scope"], "search_headline_and_link")
+        self.assertEqual(enriched[0]["media_type"], "headline_only")
+        self.assertEqual(warnings, [])
+        build.assert_not_called()
+
+    @patch("levyquant.sources.build_opener")
     def test_rate_limit_stops_subsequent_same_host_requests_without_retry(self, build):
         build.return_value.open.side_effect = HTTPError("https://www.apple.com/a", 429, "Too Many Requests", {}, None)
         result, warnings = enrich_articles([

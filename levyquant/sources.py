@@ -24,7 +24,7 @@ ALLOWED_HOSTS = frozenset({
     "www.federalreserve.gov", "arxiv.org", "rss.arxiv.org", "www.sec.gov",
     "www.apple.com", "nvidianews.nvidia.com", "ir.nasdaq.com", "www.bls.gov",
 })
-_EXCERPT_SCOPES = frozenset({"rss_metadata_and_feed_excerpt", "podcast_episode_description", "official_abstract"})
+_EXCERPT_SCOPES = frozenset({"rss_metadata_and_feed_excerpt", "podcast_episode_description", "official_abstract", "search_headline_and_link"})
 _VOID_TAGS = frozenset({"area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track", "wbr"})
 _HIDDEN_TAGS = frozenset({
     "head", "script", "style", "noscript", "svg", "nav", "header", "footer",

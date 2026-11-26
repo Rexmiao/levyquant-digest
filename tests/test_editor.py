@@ -8,7 +8,7 @@ from unittest.mock import patch
 from urllib.error import HTTPError, URLError
 
 from levyquant.editor import (
-    DEFAULT_MODEL, EditorError, EditorValidationError, editor_to_digest,
+    DEFAULT_MODEL, HEADLINE_ONLY_SUMMARY, EditorError, EditorValidationError, editor_to_digest,
     generate_editor, load_editor_schema, validate_editor,
 )
 from levyquant.render import render_digest
@@ -45,6 +45,50 @@ class EditorTests(unittest.TestCase):
         schema = load_editor_schema()
         self.assertFalse(schema["additionalProperties"])
         self.assertEqual(len(schema["properties"]["sections"]["items"]["properties"]["id"]["enum"]), 11)
+
+    def test_headline_only_source_cannot_be_expanded_into_inferred_detail(self):
+        title = "Example Company announces a research partnership"
+        self.articles[0].update(title=title, summary="", content=title,
+                                media_type="headline_only", content_scope="search_headline_and_link")
+        item = self.editor["sections"][0]["items"][0]
+        item.update(title=title, summary=HEADLINE_ONLY_SUMMARY, analysis="",
+                    evidence=[{"source_id": "art0001", "quote": title}])
+        self.assertTrue(validate_editor(self.editor, self.articles)["valid"])
+        for change in ({"title": "Example Company acquires a research business"},
+                       {"summary": "The deal adds new factories and customers."},
+                       {"analysis": "This caused the stock to rise."}):
+            with self.subTest(change=change):
+                candidate = deepcopy(self.editor)
+                candidate["sections"][0]["items"][0].update(change)
+                report = validate_editor(candidate, self.articles)
+                self.assertFalse(report["valid"])
+                self.assertIn("headline_only_expansion", {issue["code"] for issue in report["errors"]})
+
+    def test_headline_only_display_does_not_relax_financial_evidence_checks(self):
+        title = "Example Company price target rises to $100"
+        self.articles[0].update(title=title, summary="", content=title, media_type="headline_only")
+        item = self.editor["sections"][0]["items"][0]
+        item.update(title=title, summary=HEADLINE_ONLY_SUMMARY, analysis="",
+                    evidence=[{"source_id": "art0001", "quote": title}])
+        report = validate_editor(self.editor, self.articles)
+        self.assertFalse(report["valid"])
+        self.assertIn("financial_value_not_upstream_verified", {issue["code"] for issue in report["errors"]})
+
+    def test_unrepaired_headline_expansion_is_omitted_without_losing_valid_research(self):
+        title = "Example Company announces a research partnership"
+        headline = {**self.articles[0], "id": "headline1", "title": title, "summary": "", "content": title,
+                    "media_type": "headline_only", "content_scope": "search_headline_and_link"}
+        candidate = deepcopy(self.editor)
+        candidate["sections"].append({"id": "company_sector", "items": [{
+            "title": title, "summary": "An unsupported expansion detail.", "analysis": "",
+            "source_ids": ["headline1"], "evidence": [{"source_id": "headline1", "quote": title}],
+            "event_time": None}]})
+        with patch("levyquant.editor._OPEN", side_effect=[self.response(candidate), self.response(candidate)]) as opened:
+            result = generate_editor(self.articles + [headline], api_key=self.key, prompt="A sectioned digest.")
+        self.assertEqual(opened.call_count, 2)
+        self.assertEqual(result, self.editor)
+        self.assertEqual(result.generation_metadata["discarded_items"], 1)
+        self.assertIn("headline_only_expansion", result.generation_metadata["discarded_error_codes"])
 
     def test_unknown_source_model_url_and_unquoted_number_block(self):
         for change, expected in [

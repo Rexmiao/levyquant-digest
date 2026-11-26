@@ -18,6 +18,7 @@
   "coverage_notices": [
     "Coverage uses selected official releases, SEC filing notices and research abstracts, plus public publisher RSS headlines/excerpts and podcast episode descriptions from the reference newsletter's channels. Selection is limited to dated items in the past 48 hours and is not comprehensive market coverage.",
     "Publisher feeds are summarized from RSS-provided material without fetching linked article bodies or bypassing subscription access. Podcast coverage uses episode descriptions only: no audio has been downloaded or heard and no transcript is available. Research abstracts are not full-paper reviews or replicated results.",
-    "Reuters licensed content, Finnhub calendars, consensus estimates, verified market quotes, full earnings-call transcripts and authenticated X/Xueqiu/WeChat access are not connected. Missing figures and events are omitted; SEC coverage is a bounded recent-record feed rather than a complete filing archive."
+    "Reuters licensed content, Finnhub calendars, consensus estimates, verified market quotes, full earnings-call transcripts and authenticated X/Xueqiu/WeChat access are not connected. Missing figures and events are omitted; SEC coverage is a bounded recent-record feed rather than a complete filing archive.",
+    "Moomoo News Search contributes headlines and direct source links only; linked articles have not been downloaded, and no full-article summary is inferred from those records."
   ]
 }
