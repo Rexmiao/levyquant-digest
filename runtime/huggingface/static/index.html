@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="description" content="A daily briefing on macro, U.S. equities and quantitative research.">
+  <title>LevyQuant — The morning briefing</title>
+  <link rel="stylesheet" href="/static/app.css">
+  <script src="/static/app.js" defer></script>
+</head>
+<body data-page="public">
+  <header class="site-header shell">
+    <a class="brand" href="/" aria-label="LevyQuant home"><span class="brand-mark">LQ</span> LevyQuant<span class="brand-dot">.</span></a>
+    <a class="nav-link" href="/#preview">Latest edition <span aria-hidden="true">↗</span></a>
+  </header>
+  <main id="landing" class="shell">
+    <section class="hero">
+      <p class="eyebrow"><span class="live-dot"></span> THE MORNING BRIEFING</p>
+      <h1>A clearer view.<br>Ahead of the day.</h1>
+      <p class="hero-copy">Macro, U.S. equities and quantitative research, brought together in one considered daily read.</p>
+      <div class="hero-meta"><span>Every morning</span><span>Around 7 AM · New York</span><span>Free to read</span></div>
+    </section>
+    <div class="content-grid">
+      <section id="preview" class="edition-card" aria-labelledby="edition-heading">
+        <div class="section-top"><p class="eyebrow">THE LATEST EDITION</p><span id="edition-date" class="quiet">Coming soon</span></div>
+        <h2 id="edition-heading">Take a look before you subscribe.</h2>
+        <p id="edition-notice" class="muted">The first public edition is being prepared. This space will show the actual briefing once it is published.</p>
+        <div id="preview-empty" class="preview-placeholder"><span class="paper-label">LEVYQUANT / MORNING EDITION</span><div class="placeholder-line long"></div><div class="placeholder-line"></div><div class="placeholder-line short"></div><div class="placeholder-divider"></div><p>Macro &amp; policy</p><p>U.S. companies &amp; sectors</p><p>Quantitative research</p></div>
+        <iframe id="public-preview" class="digest-frame" title="Latest LevyQuant briefing" sandbox="allow-popups allow-popups-to-escape-sandbox" hidden></iframe>
+      </section>
+      <aside class="signup-card" id="subscribe">
+        <p class="eyebrow">A BETTER MORNING ROUTINE</p>
+        <h2>Stay informed.<br>Keep your inbox useful.</h2>
+        <p class="muted">Read the preview, then decide. We send one daily briefing, with links to the original sources.</p>
+        <form id="signup-form">
+          <label for="email">Your email address</label>
+          <input id="email" name="email" type="email" autocomplete="email" maxlength="254" placeholder="you@example.com" required>
+          <div class="honeypot" aria-hidden="true"><label for="website">Website</label><input id="website" name="website" tabindex="-1" autocomplete="off"></div>
+          <label class="check-row"><input id="consent" type="checkbox" required><span>Email me the morning briefing. I can unsubscribe at any time.</span></label>
+          <button id="signup-button" class="button primary" type="submit" disabled>Subscriptions opening soon <span aria-hidden="true">→</span></button>
+          <p id="signup-status" class="form-status" role="status" aria-live="polite"></p>
+        </form>
+        <p class="small muted">Confirm your email to join. Every issue includes an unsubscribe link.</p>
+        <details class="privacy"><summary>How your email is used</summary><p>We use your address to send the briefing and subscription confirmation messages. Your address and the subscriber list are not displayed publicly. You can leave using the link in any issue.</p></details>
+      </aside>
+    </div>
+    <section class="inside-grid" aria-label="Inside the briefing">
+      <article><span class="category-number">01</span><h3>Macro &amp; markets</h3><p>Policy and economic developments that matter for the trading day.</p></article>
+      <article><span class="category-number">02</span><h3>U.S. equities</h3><p>Company disclosures, sector developments and the events worth following.</p></article>
+      <article><span class="category-number">03</span><h3>Quant research</h3><p>New papers and methods, with a clear path back to the original research.</p></article>
+    </section>
+  </main>
+  <main id="subscription-flow" class="flow-shell shell" hidden>
+    <section class="flow-card"><p class="eyebrow">YOUR SUBSCRIPTION</p><h1 id="flow-title">Confirm your email.</h1><p id="flow-description" class="muted"></p><button id="flow-button" class="button primary" type="button">Confirm subscription</button><p id="flow-status" class="form-status" role="status" aria-live="polite"></p><a class="text-link" href="/">Back to the briefing</a></section>
+  </main>
+  <footer class="site-footer shell"><span>LevyQuant · A daily reading habit.</span><span>Public sources. Original links. Clear context.</span></footer>
+</body>
+</html>

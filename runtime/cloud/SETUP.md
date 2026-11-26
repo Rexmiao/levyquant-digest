@@ -69,7 +69,15 @@ python -c "import base64,secrets; print(base64.urlsafe_b64encode(secrets.token_b
 
 手动 `send` 模式会真实向内部与普通订阅合并名单发送当日稿件，同样受启用开关、密钥与发送记录检查约束。暂停日报时将 `DIGEST_ENABLED` 改回 `false`。日常无需每天手动点 Run workflow。
 
-## 加密状态与异常恢复
+## Hugging Face 公开订阅入口
+
+可部署包与配置见 `runtime/huggingface/README.md`。HF 提供公开预览、邮箱确认订阅、退订和受服务端鉴权保护的 `/admin`；Gmail SMTP 和纽约 07:00 的日程继续由 GitHub 执行。
+
+准备好实际 Space 地址后，在本仓库 Variables 新增 `DIGEST_PUBLIC_BASE_URL=https://<owner>-<space>.hf.space`。确认 HF 与本仓库使用相同状态密钥和公开地址、且确认邮件工作流已部署，再将两端的 `SUBSCRIPTIONS_ENABLED` 设置为 `true`。未启用时，现有普通名单与固定内部名单的每日发送行为保持不变。
+
+启用后，普通名单与已确认的公开订阅合并，退订的外部地址被排除，固定内部名单始终保留。公开注册只先排队确认邮件；点击邮件里的确认按钮后才加入公开订阅。确认邮件在 GitHub 上执行，另有每小时队列恢复。单次提交成功不等于实际收到邮件。
+
+### 加密状态与异常恢复
 
 发送状态分支只保存 **AES-GCM 密文**，状态解密密钥来自 `STATE_ENCRYPTION_KEY`，不提交进该分支。收件人、发送记录及需要持久化的状态不得以明文发布。
 

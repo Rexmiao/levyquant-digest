@@ -10,10 +10,12 @@ from pathlib import Path
 import tempfile
 import unittest
 from unittest.mock import Mock, patch
+from urllib.parse import parse_qs, urlsplit
 
 from levyquant import daily
 from levyquant.smtp_delivery import DeliveryError, DeliveryUncertain
 from levyquant.state_store import GitHubStateStore, LocalStateStore, StateConflict, StateError
+from levyquant.subscriptions import SubscriptionService
 
 
 NOW = datetime(2026, 11, 25, 12, tzinfo=timezone.utc)
@@ -306,6 +308,77 @@ class InputAndPipelineTests(unittest.TestCase):
                         self.assertEqual(self.smtp.call_count, 1)
                         self.assertEqual(str(self.smtp.call_args.args[0]["To"]), environment["SMTP_USERNAME"])
         self.factory.assert_not_called()
+
+    def test_enabled_subscriptions_merge_confirmed_filter_optouts_and_keep_internal(self):
+        base = "https://example-digest.hf.space"
+        environment = {**self.environment, "SUBSCRIPTIONS_ENABLED": "true", "DIGEST_PUBLIC_BASE_URL": base,
+                       "DIGEST_RECIPIENTS": json.dumps(RECIPIENTS + ["suppressed@example.org"])}
+        store = TestStore(self.root / "remote")
+        service = SubscriptionService(store, environment["STATE_ENCRYPTION_KEY"], base, now=NOW)
+        service.request_signup("public-reader@example.org")
+        claimed = service.claim_confirmation(service.pending_confirmations()[0]["id"])
+        params = parse_qs(urlsplit(claimed["url"]).query)
+        self.assertEqual(service.confirm(params["id"][0], params["token"][0])["status"], "confirmed")
+        for address in (RECIPIENTS[0], RECIPIENTS[1], "suppressed@example.org"):
+            params = parse_qs(urlsplit(service.unsubscribe_url(address)).query)
+            if address == RECIPIENTS[1]:
+                service.unsubscribe(params["id"][0], params["token"][0])
+            else:
+                service.admin_suppress(params["id"][0])
+        result = daily.run(self.config, "send", environment, self.root / "outputs")
+        self.assertEqual(result["accepted"], 2)
+        self.assertEqual({str(call.args[0]["To"]) for call in self.smtp.call_args_list},
+                         {RECIPIENTS[0], "public-reader@example.org"})
+        private_links = []
+        for call in self.smtp.call_args_list:
+            text = call.args[0].get_body(preferencelist=("plain",)).get_content()
+            if str(call.args[0]["To"]) == RECIPIENTS[0]:
+                self.assertNotIn("Manage or unsubscribe", text)
+                self.assertNotIn("/unsubscribe?", text)
+                continue
+            self.assertIn("Manage or unsubscribe", text)
+            link = next(line for line in text.splitlines() if line.startswith(base + "/unsubscribe?"))
+            self.assertNotIn("@", link)
+            private_links.append(link)
+        self.assertEqual(len(set(private_links)), 1)
+        frozen = TestStore(self.root / "remote").load(PATH)
+        self.assertEqual(frozen["content_sha256"], daily.edition_fingerprint(frozen))
+        self.assertNotIn("/unsubscribe?", frozen["html"] + frozen["text"])
+        latest = TestStore(self.root / "remote").load("public/latest.json")
+        self.assertEqual(set(latest), {"subject", "date", "html", "text"})
+        self.assertEqual(latest["html"], frozen["html"])
+        self.assertEqual(latest["text"], frozen["text"])
+        self.assertNotIn("public-reader@example.org", json.dumps(latest))
+
+    def test_subscription_flag_disabled_or_preview_never_initializes_service(self):
+        with patch("levyquant.daily.SubscriptionService") as service:
+            daily.run(self.config, "send", self.environment, self.root / "outputs")
+            service.assert_not_called()
+        for mode in ("preview", "preview-email", "smtp-test"):
+            with self.subTest(mode=mode), patch("levyquant.daily.SubscriptionService") as service:
+                environment = {**self.environment, "SUBSCRIPTIONS_ENABLED": "true"}
+                daily.run(self.config, mode, environment, self.root / ("outputs-" + mode))
+                service.assert_not_called()
+
+    def test_subscription_base_url_is_required_before_network_and_latest_needs_acceptance(self):
+        environment = {**self.environment, "SUBSCRIPTIONS_ENABLED": "true"}
+        with self.assertRaises(StateError):
+            daily.run(self.config, "send", environment, self.root / "outputs")
+        self.factory.assert_not_called()
+        self.collect.assert_not_called()
+        self.smtp.assert_not_called()
+        self.smtp.side_effect = DeliveryError("offline rejection", stage="recipient", smtp_code=550)
+        result = daily.run(self.config, "send", self.environment, self.root / "outputs")
+        self.assertEqual(result["accepted"], 0)
+        self.assertIsNone(TestStore(self.root / "remote").load("public/latest.json"))
+
+    def test_partial_acceptance_can_publish_only_the_safe_base_edition(self):
+        self.smtp.side_effect = [DeliveryError("offline rejection", stage="recipient", smtp_code=550), {"status": "accepted"}]
+        result = daily.run(self.config, "send", self.environment, self.root / "outputs")
+        self.assertEqual(result["accepted"], 1)
+        latest = TestStore(self.root / "remote").load("public/latest.json")
+        self.assertEqual(set(latest), {"subject", "date", "html", "text"})
+        self.assertIn(QUOTE, latest["text"])
 
     def test_same_day_partial_rerun_reuses_frozen_body_without_recollecting_or_editing(self):
         self.smtp.side_effect = [DeliveryError("not exposed", stage="recipient", smtp_code=550), {"status": "accepted"}]

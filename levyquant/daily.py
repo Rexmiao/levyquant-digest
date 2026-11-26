@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 from datetime import datetime, timedelta, timezone
+from html import escape
 import hashlib
 import json
 import os
@@ -17,6 +18,8 @@ from .render import render_digest
 from .smtp_delivery import DeliveryError, DeliveryUncertain, prepare_message, send_one
 from .sources import enrich_articles
 from .state_store import GitHubStateStore, LocalStateStore, StateError
+from .state_store import StateConflict
+from .subscriptions import SubscriptionService, validate_public_base_url
 
 ROOT = Path(__file__).resolve().parent.parent
 FREE_MODEL = "gemini-3.5-flash-lite"
@@ -102,6 +105,8 @@ def preflight(config: dict, mode: str, environment: dict) -> list[str]:
             internal = recipients_from(environment.get("DIGEST_INTERNAL_RECIPIENTS", ""))
         except ConfigurationError:
             raise ConfigurationError("DIGEST_INTERNAL_RECIPIENTS secret is missing or invalid") from None
+        if environment.get("SUBSCRIPTIONS_ENABLED", "").lower() == "true":
+            validate_public_base_url(environment.get("DIGEST_PUBLIC_BASE_URL", ""))
         # Both groups are required. Reuse the same parser to deduplicate across
         # groups and apply its 100-recipient limit to the final combined list.
         return recipients_from(json.dumps(subscribers + internal))
@@ -200,7 +205,8 @@ def claim_run_date(store, environment: dict, date: str, now: datetime) -> None:
 
 
 def deliver_edition(store, path: str, edition: dict, recipients: list[str], *, sender: str,
-                    password: str, execution_id: str, transport=None) -> dict:
+                    password: str, execution_id: str, transport=None, subscription_service=None,
+                    internal_recipients: list[str] | None = None) -> dict:
     """Persist a claim before each attempt; do not replay ambiguous results."""
     if edition.get("mode") != "live" or edition.get("validated") is not True:
         raise ConfigurationError("Only a validated live edition may be delivered")
@@ -210,9 +216,20 @@ def deliver_edition(store, path: str, edition: dict, recipients: list[str], *, s
         raise ConfigurationError("Delivery state path does not match the current edition")
     transport = transport or send_one
     recipients = recipients_from(json.dumps(recipients))
+    internal_keys = {address.casefold() for address in recipients_from(json.dumps(internal_recipients))} if internal_recipients else set()
     # Validate every envelope before a reservation or SMTP connection is made.
-    messages = [(address, prepare_message(edition["subject"], edition["html"], edition["text"],
-                                         sender, address, edition["edition_id"])) for address in recipients]
+    messages = []
+    for address in recipients:
+        html_body, text_body = edition["html"], edition["text"]
+        if subscription_service is not None and address.casefold() not in internal_keys:
+            url = subscription_service.unsubscribe_url(address)
+            footer = ('<hr><p style="font-size:12px;color:#5f6368;">'
+                      '<a href="' + escape(url, quote=True) + '">Manage or unsubscribe from the mailing list</a></p>')
+            closing = html_body.lower().rfind("</body>")
+            html_body = html_body[:closing] + footer + html_body[closing:] if closing >= 0 else html_body + footer
+            text_body += "\n\nManage or unsubscribe from the mailing list:\n" + url + "\n"
+        messages.append((address, prepare_message(edition["subject"], html_body, text_body,
+                                                 sender, address, edition["edition_id"])))
     delivery = edition.setdefault("deliveries", {})
     blocked = 0
     for address, message in messages:
@@ -255,6 +272,21 @@ def deliver_edition(store, path: str, edition: dict, recipients: list[str], *, s
     return result
 
 
+def publish_latest(store, edition: dict) -> None:
+    """Publish only the unpersonalized public edition, with bounded CAS retries."""
+    value = {key: edition[key] for key in ("subject", "date", "html", "text")}
+    for attempt in range(3):
+        current = store.load("public/latest.json")
+        if current == value or (isinstance(current, dict) and current.get("date", "") > value["date"]):
+            return
+        try:
+            store.save("public/latest.json", value)
+            return
+        except StateConflict:
+            if attempt == 2:
+                raise
+
+
 def run(config: dict, mode: str, environment: dict, output: Path) -> dict:
     config = dict(config)
     config["sender"] = environment.get("SMTP_USERNAME") or config.get("sender")
@@ -271,11 +303,18 @@ def run(config: dict, mode: str, environment: dict, output: Path) -> dict:
         receipt = send_one(message, username=sender, password=environment["SMTP_APP_PASSWORD"])
         return {"mode": mode, "status": receipt["status"], "test_to_sender_only": True}
 
+    subscription_service = None
     if mode == "send":
         store = GitHubStateStore(environment["GITHUB_REPOSITORY"], environment["GITHUB_TOKEN"],
                                  encryption_key=environment["STATE_ENCRYPTION_KEY"])
         store.ensure_state_branch()
         claim_run_date(store, environment, date, now)
+        if environment.get("SUBSCRIPTIONS_ENABLED", "").lower() == "true":
+            subscription_service = SubscriptionService(store, environment["STATE_ENCRYPTION_KEY"],
+                                                       environment["DIGEST_PUBLIC_BASE_URL"], now=now)
+            recipients = subscription_service.delivery_recipients(
+                recipients_from(environment["DIGEST_RECIPIENTS"]),
+                recipients_from(environment["DIGEST_INTERNAL_RECIPIENTS"]))
     else:
         store = LocalStateStore(output / "preview-state")
     edition_path = "editions/" + date + ".json"
@@ -350,10 +389,13 @@ def run(config: dict, mode: str, environment: dict, output: Path) -> dict:
                 "section_count": edition["section_count"]}
     receipt = deliver_edition(store, edition_path, edition, recipients, sender=config["sender"],
                               password=environment["SMTP_APP_PASSWORD"],
-                              execution_id=environment.get("GITHUB_RUN_ID", "manual"))
+                              execution_id=environment.get("GITHUB_RUN_ID", "manual"),
+                              subscription_service=subscription_service,
+                              internal_recipients=recipients_from(environment["DIGEST_INTERNAL_RECIPIENTS"]) if subscription_service else None)
     # At least one durable acceptance is sufficient to remember that these
     # public stories have appeared; an incomplete edition remains frozen for reruns.
     if receipt["accepted"]:
+        publish_latest(store, edition)
         cutoff = (now - timedelta(days=config["history_days"])).date().isoformat()
         current = {item["id"]: item for item in history["events"] if item.get("date", "") >= cutoff}
         current.update({item["id"]: item for item in edition["events"]})

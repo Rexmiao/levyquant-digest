@@ -46,6 +46,8 @@ jobs:
       PYTHONDONTWRITEBYTECODE: '1'
       DIGEST_ENABLED: ${{ vars.DIGEST_ENABLED }}
       GEMINI_FREE_TIER_CONFIRMED: ${{ vars.GEMINI_FREE_TIER_CONFIRMED }}
+      SUBSCRIPTIONS_ENABLED: ${{ vars.SUBSCRIPTIONS_ENABLED }}
+      DIGEST_PUBLIC_BASE_URL: ${{ vars.DIGEST_PUBLIC_BASE_URL }}
       RUN_MODE: ${{ github.event_name == 'schedule' && 'send' || inputs.run_mode || 'preview' }}
     steps:
       - name: Check repository scope, selected mode, and delivery switches

@@ -10,6 +10,7 @@ name: LevyQuant Offline Checks
       - 'config/cloud.json'
       - 'config/official-sources.json'
       - 'requirements-cloud.txt'
+      - 'runtime/huggingface/**'
       - '.github/workflows/**'
   pull_request:
     paths:
@@ -20,6 +21,7 @@ name: LevyQuant Offline Checks
       - 'config/cloud.json'
       - 'config/official-sources.json'
       - 'requirements-cloud.txt'
+      - 'runtime/huggingface/**'
       - '.github/workflows/**'
   workflow_dispatch: {}
 
