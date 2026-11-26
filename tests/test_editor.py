@@ -156,6 +156,103 @@ class EditorTests(unittest.TestCase):
         self.assertNotIn(self.key, str(captured.exception))
         self.assertNotIn("provider-body", str(captured.exception))
 
+    def test_after_one_repair_omit_only_bad_items_and_keep_every_valid_item(self):
+        articles, good_items = [], []
+        for number, title in enumerate(("Linear estimates", "Tree estimates", "Temporal validation",
+                                        "Sample selection", "Model stability", "Forecast comparison"), 1):
+            source_id = f"art{number:04d}"
+            quote = "Researchers examine " + title.lower() + "."
+            articles.append({**self.articles[0], "id": source_id, "title": title, "summary": quote,
+                             "url": f"https://example.org/paper/{number}"})
+            good_items.append({"title": title, "summary": quote, "analysis": "",
+                               "source_ids": [source_id], "evidence": [{"source_id": source_id, "quote": quote}],
+                               "event_time": None})
+        bad_number = deepcopy(good_items[0])
+        bad_number.update(title="Unsupported sample size", summary="Researchers used 999 observations.")
+        bad_date = deepcopy(good_items[1])
+        bad_date.update(title="Unsupported exact date", summary="An update is expected January 1, 2027.")
+        output = {"sections": [
+            {"id": "quant_research", "items": [good_items[0], bad_number, *good_items[1:]]},
+            {"id": "geopolitics_macro", "items": [bad_date]},
+        ]}
+        original = deepcopy(output)
+        with patch("levyquant.editor._OPEN", side_effect=[self.response(output), self.response(output)]) as opened:
+            result = generate_editor(articles, api_key=self.key, prompt="Digest")
+        self.assertEqual(opened.call_count, 2)
+        self.assertEqual(output, original)
+        self.assertEqual(result, {"sections": [{"id": "quant_research", "items": good_items}]})
+        self.assertTrue(validate_editor(result, articles)["valid"])
+        self.assertEqual(result.generation_metadata["requests"], 2)
+        self.assertEqual(result.generation_metadata["discarded_items"], 2)
+        self.assertIn("unsupported_precise_date", result.generation_metadata["discarded_error_codes"])
+        self.assertIn("unsupported_numeric_claim", result.generation_metadata["discarded_error_codes"])
+        self.assertEqual(set(json.loads(json.dumps(result))), {"sections"})
+        snapshot = result.generation_metadata
+        snapshot["discarded_items"] = 999
+        self.assertEqual(result.generation_metadata["discarded_items"], 2)
+        with self.assertRaises(AttributeError):
+            result.generation_metadata = {}
+        digest = editor_to_digest(result, articles, date="2026-11-25", cutoff="2026-11-25T07:00:00-05:00",
+                                  coverage_warnings=["Existing source coverage notice."])
+        self.assertEqual(len(digest["sections"][0]["items"]), 6)
+        self.assertEqual(digest["editor_generation"]["discarded_items"], 2)
+        self.assertEqual(digest["coverage_warnings"][0], "Existing source coverage notice.")
+        self.assertTrue(any("Excluded 2 editorial items" in notice for notice in digest["coverage_warnings"]))
+
+    def test_all_invalid_items_still_fail_after_two_requests(self):
+        invalid = deepcopy(self.editor)
+        invalid["sections"][0]["items"][0]["summary"] = "Researchers used 999 observations."
+        with patch("levyquant.editor._OPEN", side_effect=[self.response(invalid), self.response(invalid)]) as opened:
+            with self.assertRaises(EditorValidationError) as captured:
+                generate_editor(self.articles, api_key=self.key, prompt="Digest")
+        self.assertEqual(opened.call_count, 2)
+        self.assertIn("unsupported_numeric_claim", str(captured.exception))
+
+    def test_schema_and_unknown_source_errors_are_fatal_even_with_good_items(self):
+        for defect in ("item_schema", "top_level_schema", "unknown_source", "duplicate_section"):
+            with self.subTest(defect=defect):
+                invalid = deepcopy(self.editor)
+                bad = deepcopy(invalid["sections"][0]["items"][0])
+                bad["title"] = "A separate item"
+                if defect == "item_schema":
+                    bad["extra_field"] = "not allowed"
+                elif defect == "unknown_source":
+                    bad["source_ids"] = ["missing"]
+                invalid["sections"][0]["items"].append(bad)
+                if defect == "top_level_schema":
+                    invalid["extra_field"] = "not allowed"
+                elif defect == "duplicate_section":
+                    invalid["sections"].append(deepcopy(invalid["sections"][0]))
+                with patch("levyquant.editor._OPEN", side_effect=[self.response(invalid), self.response(invalid)]) as opened:
+                    with self.assertRaises(EditorValidationError):
+                        generate_editor(self.articles, api_key=self.key, prompt="Digest")
+                self.assertEqual(opened.call_count, 2)
+        unsafe_articles = deepcopy(self.articles)
+        unsafe_articles[0]["url"] = "javascript:alert(1)"
+        with patch("levyquant.editor._OPEN") as opened:
+            with self.assertRaises(EditorValidationError):
+                generate_editor(unsafe_articles, api_key=self.key, prompt="Digest")
+        self.assertEqual(opened.call_count, 0)
+
+    def test_invalid_or_unresolvable_item_error_paths_are_not_salvaged(self):
+        invalid = deepcopy(self.editor)
+        bad = deepcopy(invalid["sections"][0]["items"][0])
+        bad.update(title="Unsupported sample size", summary="Researchers used 999 observations.")
+        invalid["sections"][0]["items"].append(bad)
+        for wrong_path in ("editor_output.sections[0]", "editor_output.sections[99].items[0]",
+                           "editor_output.sections[0].items[99]"):
+            with self.subTest(path=wrong_path):
+                def unresolvable_report(editor, articles):
+                    report = validate_editor(editor, articles)
+                    for issue in report["errors"]:
+                        issue["path"] = wrong_path
+                    return report
+                with patch("levyquant.editor.validate_editor", side_effect=unresolvable_report), \
+                        patch("levyquant.editor._OPEN", side_effect=[self.response(invalid), self.response(invalid)]) as opened:
+                    with self.assertRaises(EditorValidationError):
+                        generate_editor(self.articles, api_key=self.key, prompt="Digest")
+                self.assertEqual(opened.call_count, 2)
+
     def test_network_error_and_truncated_generation_stop_without_repair(self):
         with patch("levyquant.editor._OPEN", side_effect=URLError(self.key)) as opened:
             with self.assertRaises(EditorError) as captured:
