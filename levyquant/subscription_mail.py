@@ -148,15 +148,22 @@ def run(environment: dict | None = None, *, service=None, transport=None, admin_
         # recipient or token. An unexpected exception leaves it reserved.
         recipient = validate_email(claimed["email"])
         url = _confirmation_url(claimed["url"], service, claimed["id"])
+        introduction = "This email address was entered on the LevyQuant subscription page."
+        description = ("LevyQuant sends a morning briefing on macroeconomics, U.S. equities and "
+                       "quantitative research, around 7 a.m. New York time.")
+        instruction = "To subscribe, open the page below and select Confirm."
+        expiry_and_choice = ("This link expires 48 hours after the request. "
+                             "If you did not request this, ignore this email. "
+                             "No subscription will start unless you confirm.")
         html = (
-            "<p>You requested a LevyQuant daily news subscription.</p>"
-            '<p><a href="' + escape(url, quote=True) + '">Open the confirmation page</a></p>'
-            "<p>Opening the link alone does not subscribe you. Press Confirm on the page to finish. "
-            "The link expires after 48 hours. If you did not request this, ignore this message.</p>"
+            "<p>" + introduction + "</p><p>" + description + "</p><p>" + instruction + "</p>"
+            '<p><a href="' + escape(url, quote=True) + '">Review and confirm subscription</a></p>'
+            "<p>" + expiry_and_choice + "</p>"
+            '<p style="font-size:12px;color:#5f6368;">LevyQuant &middot; ' + escape(sender, quote=True) + "</p>"
         )
-        text = ("You requested a LevyQuant daily news subscription.\n\nOpen the confirmation page:\n" + url
-                + "\n\nOpening the link alone does not subscribe you. Press Confirm on the page to finish. "
-                "The link expires after 48 hours. If you did not request this, ignore this message.\n")
+        text = "\n\n".join((introduction, description, instruction,
+                               "Review and confirm subscription:\n" + url,
+                               expiry_and_choice, "LevyQuant · " + sender)) + "\n"
         message = prepare_message("Confirm your LevyQuant subscription", html, text, sender, recipient,
                                   "subscription-confirm-" + claimed["id"] + "-" + claimed["reservation_id"])
         status, stage, code = _submit(transport, message, sender, password)

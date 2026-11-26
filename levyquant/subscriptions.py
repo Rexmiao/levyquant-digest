@@ -369,16 +369,22 @@ class SubscriptionService:
 
     def is_delivery_allowed(self, email: str, internal: list[str]) -> bool:
         """Read current opt-outs immediately before SMTP; never mutate the registry."""
+        return self.delivery_recipient_kind(email, internal) != "blocked"
+
+    def delivery_recipient_kind(self, email: str, internal: list[str]) -> str:
+        """Return the current authorization source without changing the registry."""
         email = validate_email(email)
         if not isinstance(internal, list):
             raise SubscriptionError("A valid fixed internal recipient list is required")
         required = {validate_email(address) for address in internal}
         if email in required:
-            return True
+            return "internal"
         record = self._find(self._load(), email)
         if record is None or record["status"] in ("unsubscribed", "suppressed") or record.get("opted_out"):
-            return False
-        return record["status"] in ("seeded", "confirmed") or record.get("legacy_authorized") is True
+            return "blocked"
+        if record["status"] == "confirmed":
+            return "confirmed"
+        return "authorized" if record["status"] == "seeded" or record.get("legacy_authorized") is True else "blocked"
 
     def pending_confirmations(self, limit: int = 20) -> list[dict]:
         if type(limit) is not int or not 1 <= limit <= 20:

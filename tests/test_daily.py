@@ -13,6 +13,7 @@ from unittest.mock import Mock, patch
 from urllib.parse import parse_qs, urlsplit
 
 from levyquant import daily
+from levyquant.render import RECIPIENT_FOOTER_SLOT, render_digest
 from levyquant.delivery_reports import read_run_reports, record_run_report
 from levyquant.smtp_delivery import DeliveryError, DeliveryUncertain
 from levyquant.state_store import GitHubStateStore, LocalStateStore, StateConflict, StateError
@@ -57,6 +58,36 @@ def diagnostic(identifier="official", status="ok", *, enabled=True, parsed=1, da
 class TestStore(LocalStateStore):
     def ensure_state_branch(self):
         pass
+
+
+class CoverageCopyTests(unittest.TestCase):
+    def test_cited_material_limits_are_combined_without_duplicate_notices(self):
+        base = [" Selected coverage. ", "selected coverage."]
+        articles = [
+            {"content_scope": "rss_metadata_and_feed_excerpt"},
+            {"content_scope": "search_headline_and_link", "media_type": "headline_only"},
+            {"content_scope": "podcast_episode_description", "media_type": "podcast"},
+            {"content_scope": "official_abstract", "section": "quant_research"}]
+        notices = daily.build_coverage_notices(base, articles + articles)
+        self.assertEqual(len(notices), 2)
+        self.assertEqual(notices[0], "Selected coverage.")
+        for phrase in ("Publisher feed excerpts", "Search inputs", "Podcasts use", "Research summaries"):
+            self.assertEqual(notices[1].count(phrase), 1)
+
+    def test_uncited_media_limits_are_absent_and_real_exceptions_are_retained(self):
+        rejected = "Excluded 2 editorial items that failed source-evidence checks; remaining items passed the same checks."
+        notices = daily.build_coverage_notices(["Selected coverage."],
+            [{"content_scope": "selected_official_text", "section": "macro"}],
+            source_gaps=True, shortened=True, extra_notices=[rejected, rejected])
+        self.assertEqual(notices, ["Selected coverage.",
+            "Some source items or dates were unavailable; some excerpts were shortened.", rejected])
+        self.assertNotIn("Podcasts", " ".join(notices))
+        self.assertNotIn("Research", " ".join(notices))
+        self.assertNotIn("article bodies", " ".join(notices))
+
+    def test_empty_edition_preserves_no_new_items_without_claiming_media_review(self):
+        empty = "No new eligible items were available from the configured publisher feeds and selected official sources for this edition."
+        self.assertEqual(daily.build_coverage_notices([], [], extra_notices=[empty]), [empty])
 
 
 class BusinessTests(unittest.TestCase):
@@ -207,6 +238,94 @@ class BusinessTests(unittest.TestCase):
         self.assertEqual(frozen["delivery_summary"]["reserved"], 1)
 
 
+    def test_v2_footer_has_distinct_real_authorization_reasons_without_public_personalization(self):
+        service = SubscriptionService(self.store, base64.urlsafe_b64encode(b"s" * 32).decode(),
+                                      "https://example-digest.hf.space", now=NOW)
+        service.delivery_recipients(RECIPIENTS, [RECIPIENTS[0]])
+        service.request_signup("public-reader@example.org")
+        pending = service.pending_confirmations()[0]
+        claim = service.claim_confirmation(pending["id"])
+        service.mark_confirmation(claim["id"], "accepted", reservation_id=claim["reservation_id"])
+        params = parse_qs(urlsplit(claim["url"]).query)
+        service.confirm(params["id"][0], params["token"][0])
+        self.assertEqual(service.delivery_recipient_kind(RECIPIENTS[0], [RECIPIENTS[0]]), "internal")
+        self.assertEqual(service.delivery_recipient_kind(RECIPIENTS[1], [RECIPIENTS[0]]), "authorized")
+        self.assertEqual(service.delivery_recipient_kind("public-reader@example.org", [RECIPIENTS[0]]), "confirmed")
+        self.assertEqual(service.delivery_recipient_kind("missing@example.org", [RECIPIENTS[0]]), "blocked")
+        digest = {"title": "LevyQuant Morning Briefing", "date": DATE, "language": "en", "mode": "live",
+            "footer_personalization": True, "sections": [{"title": "Macro", "items": [{
+                "title": "Example update", "summary": "<script>alert('untrusted')</script>", "source_ids": [ARTICLE["id"]]}]}]}
+        html, text = render_digest(digest, [ARTICLE])
+        value = edition()
+        value.update(copy_version=2, subject=daily._briefing_subject(DATE), html=html, text=text)
+        value["content_sha256"] = daily.edition_fingerprint(value)
+        self.store.save(PATH, value)
+        transport = Mock(return_value={"status": "accepted"})
+        recipients = RECIPIENTS + ["public-reader@example.org"]
+        daily.deliver_edition(self.store, PATH, value, recipients, sender="sender@example.com", password="offline",
+            execution_id="test", transport=transport, subscription_service=service, internal_recipients=[RECIPIENTS[0]])
+        reasons = {RECIPIENTS[0]: "Operator archive copy",
+            RECIPIENTS[1]: "This briefing is sent to an address on LevyQuant’s authorized mailing list.",
+            "public-reader@example.org": "This briefing is sent because you confirmed a LevyQuant subscription."}
+        for call in transport.call_args_list:
+            message = call.args[0]
+            address = str(message["To"])
+            body = message.get_body(preferencelist=("html",)).get_content()
+            plain = message.get_body(preferencelist=("plain",)).get_content()
+            reason = reasons[address]
+            footer_start = body.index('data-digest-block="footer"')
+            self.assertLess(footer_start, body.index(reason))
+            self.assertLess(body.index(reason), body.index("</td>", footer_start))
+            self.assertIn(reason, plain)
+            self.assertNotIn(RECIPIENT_FOOTER_SLOT, body)
+            self.assertNotIn("<script>", body)
+            self.assertIn("&lt;script&gt;", body)
+            if address == RECIPIENTS[0]:
+                self.assertIsNone(message["List-Unsubscribe"])
+                self.assertNotIn("Unsubscribe from LevyQuant", body + plain)
+            else:
+                self.assertGreater(body.index("Unsubscribe from LevyQuant"), footer_start)
+                self.assertIn("&amp;token=", body)
+                self.assertIn("/one-click-unsubscribe?", str(message["List-Unsubscribe"]))
+        frozen = self.store.load(PATH)
+        self.assertEqual((frozen["html"], frozen["text"]), (html, text))
+        self.assertEqual(frozen["content_sha256"], daily.edition_fingerprint(frozen))
+        self.assertNotIn("This briefing is sent", html + text)
+        self.assertNotIn("Operator archive copy", html + text)
+
+    def test_v1_frozen_copy_keeps_original_subject_body_and_legacy_footer(self):
+        service = SubscriptionService(self.store, base64.urlsafe_b64encode(b"s" * 32).decode(),
+                                      "https://example-digest.hf.space", now=NOW)
+        service.delivery_recipients(RECIPIENTS, [RECIPIENTS[0]])
+        original = deepcopy(self.value)
+        transport = Mock(return_value={"status": "accepted"})
+        daily.deliver_edition(self.store, PATH, self.value, [RECIPIENTS[1]], sender="sender@example.com",
+            password="offline", execution_id="test", transport=transport, subscription_service=service,
+            internal_recipients=[RECIPIENTS[0]])
+        message = transport.call_args.args[0]
+        self.assertEqual(str(message["Subject"]), original["subject"])
+        self.assertIn("Manage or unsubscribe from the mailing list", message.get_body(preferencelist=("html",)).get_content())
+        self.assertNotIn("This briefing is sent", message.get_body(preferencelist=("plain",)).get_content())
+        frozen = self.store.load(PATH)
+        self.assertEqual((frozen["subject"], frozen["html"], frozen["text"], frozen["content_sha256"]),
+                         (original["subject"], original["html"], original["text"], original["content_sha256"]))
+        self.assertNotIn("copy_version", frozen)
+
+    def test_v2_authorization_kind_read_failure_stops_before_transport(self):
+        value = deepcopy(self.value)
+        value.update(copy_version=2, html='<table><tr data-digest-block="footer"><td>' + RECIPIENT_FOOTER_SLOT + '</td></tr></table>')
+        value["content_sha256"] = daily.edition_fingerprint(value)
+        self.store.save(PATH, value)
+        service, transport = Mock(), Mock()
+        service.is_delivery_allowed.return_value = True
+        service.delivery_recipient_kind.side_effect = StateError("Offline authorization metadata")
+        with self.assertRaises(StateError):
+            daily.deliver_edition(self.store, PATH, value, [RECIPIENTS[1]], sender="sender@example.com",
+                password="offline", execution_id="test", transport=transport, subscription_service=service,
+                internal_recipients=[RECIPIENTS[0]])
+        transport.assert_not_called()
+
+
 class InputAndPipelineTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
@@ -218,7 +337,7 @@ class InputAndPipelineTests(unittest.TestCase):
             "model": daily.FREE_MODEL, "lookback_hours": 48, "max_items_per_source": 30,
             "max_source_characters": 150000, "max_output_tokens": 8192, "fetch_timeout_seconds": 20,
             "max_enriched_articles": 10, "source_manifest": "manifest.json", "coverage_notices": [],
-            "edition": "Morning Edition", "title": "LevyQuant Daily", "history_days": 14}
+            "edition": "Morning Edition", "title": "LevyQuant Morning Briefing", "history_days": 14}
         self.environment = {"DIGEST_ENABLED": "true", "GEMINI_FREE_TIER_CONFIRMED": "true",
             "GEMINI_API_KEY": "offline-model-key", "SMTP_APP_PASSWORD": "offline-password",
             "GITHUB_TOKEN": "offline-github-token", "GITHUB_REPOSITORY": "owner/private",
@@ -257,6 +376,22 @@ class InputAndPipelineTests(unittest.TestCase):
             diagnostic("moomoo_news_search", "empty_feed", parsed=0, dated=0, eligible=0, selected=0),
             diagnostic("other_moomoo", "disabled", enabled=False, parsed=0, dated=0, eligible=0, selected=0)]
         return sources, defaults
+
+    def test_new_copy_uses_fixed_english_month_subject_and_unpersonalized_footer_slot(self):
+        self.assertEqual(daily._briefing_subject("2026-11-26"), "LevyQuant Morning Briefing — November 26, 2026")
+        self.assertEqual(daily._briefing_subject("2027-01-01"), "LevyQuant Morning Briefing — January 1, 2027")
+        with self.assertRaises(daily.ConfigurationError):
+            daily._briefing_subject("20261126")
+        daily.run(self.config, "preview", self.environment, self.root / "outputs")
+        value = TestStore(self.root / "outputs/preview-state").load(PATH)
+        self.assertEqual(value["copy_version"], 2)
+        self.assertEqual(value["subject"], "LevyQuant Morning Briefing — November 25, 2026")
+        self.assertIn("LevyQuant Morning Briefing", value["html"])
+        self.assertEqual(value["html"].count(RECIPIENT_FOOTER_SLOT), 1)
+        self.assertNotIn(RECIPIENT_FOOTER_SLOT, value["text"])
+        self.assertNotIn("This briefing is sent", value["html"] + value["text"])
+        self.assertEqual(value["content_sha256"], daily.edition_fingerprint(value))
+        self.smtp.assert_not_called()
 
     def test_send_uses_shared_keywords_only_on_fixed_source_and_freezes_revision(self):
         original, defaults = self.enable_moomoo_source()
@@ -420,7 +555,9 @@ class InputAndPipelineTests(unittest.TestCase):
         self.assertEqual([row["status"] for row in frozen["source_diagnostics"]], ["ok", "failed", "disabled"])
         self.assertNotIn("private-marker-not-for-edition", json.dumps(frozen))
         self.assertNotIn("available official excerpts", frozen["text"])
-        self.assertIn("publisher feed excerpts", frozen["text"])
+        self.assertIn("Publisher feed excerpts are used without reading linked article bodies.", frozen["text"])
+        self.assertIn("Some source items or dates were unavailable.", frozen["text"])
+        self.assertNotIn("broken: request failed", frozen["text"])
 
     def test_podcast_scope_media_and_date_basis_reach_editor_without_audio_url(self):
         self.collection_articles = [{**ARTICLE, "media_type": "podcast", "date_basis": "updated",
@@ -434,7 +571,7 @@ class InputAndPipelineTests(unittest.TestCase):
         self.assertNotIn("audio_url", public)
         self.assertIn("audio has not been listened to or transcribed", self.generate.call_args.kwargs["prompt"])
         frozen = TestStore(self.root / "outputs" / "preview-state").load(PATH)
-        self.assertIn("show notes or episode descriptions only", frozen["text"])
+        self.assertIn("Podcasts use episode descriptions; audio and transcripts were not reviewed.", frozen["text"])
 
     def test_missing_diagnostics_or_all_disabled_sources_do_not_allow_sending(self):
         self.collection_reports = []
@@ -587,7 +724,7 @@ class InputAndPipelineTests(unittest.TestCase):
                 self.assertNotIn("Manage or unsubscribe", text)
                 self.assertNotIn("/unsubscribe?", text)
                 continue
-            self.assertIn("Manage or unsubscribe", text)
+            self.assertIn("Unsubscribe from LevyQuant", text)
             link = next(line for line in text.splitlines() if line.startswith(base + "/unsubscribe?"))
             self.assertNotIn("@", link)
             private_links.append(link)

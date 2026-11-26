@@ -2,6 +2,7 @@
 from contextlib import redirect_stdout
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone
+from html.parser import HTMLParser
 from io import StringIO
 import base64
 import json
@@ -295,7 +296,7 @@ class ConfirmationWorkerTests(unittest.TestCase):
             self.assertEqual(record["confirmation"]["status"], "reserved")
             self.assertIsNone(self.service.claim_confirmation(record["id"]))
             self.assertEqual(str(message["To"]), "reader@example.org")
-            self.assertIn("Opening the link alone does not subscribe you", message.get_body(preferencelist=("plain",)).get_content())
+            self.assertIn("No subscription will start unless you confirm.", message.get_body(preferencelist=("plain",)).get_content())
             return {"status": "accepted", "smtp_code": 250}
         result = subscription_mail.run(self.environment, service=self.service, transport=transport)
         self.assertEqual(result["accepted"], 1)
@@ -303,6 +304,62 @@ class ConfirmationWorkerTests(unittest.TestCase):
         repeat = Mock()
         self.assertEqual(subscription_mail.run(self.environment, service=self.service, transport=repeat)["accepted"], 0)
         repeat.assert_not_called()
+
+    def test_confirmation_copy_explains_identity_and_choice_in_both_formats(self):
+        self.environment["SMTP_USERNAME"] = "sender&briefing@example.org"
+        messages = []
+
+        def transport(message, **kwargs):
+            messages.append(message)
+            return {"status": "accepted", "smtp_code": 250}
+
+        result = subscription_mail.run(self.environment, service=self.service, transport=transport)
+        self.assertEqual(result["accepted"], 1)
+        self.assertEqual(len(messages), 1)
+        message = messages[0]
+        self.assertEqual(str(message["Subject"]), "Confirm your LevyQuant subscription")
+        plain = message.get_body(preferencelist=("plain",)).get_content()
+        html = message.get_body(preferencelist=("html",)).get_content()
+
+        class ConfirmationParser(HTMLParser):
+            def __init__(self):
+                super().__init__()
+                self.links, self.text, self.actions = [], [], []
+
+            def handle_starttag(self, tag, attributes):
+                if tag == "a":
+                    self.links.append(dict(attributes).get("href"))
+                if tag in ("form", "input", "script", "iframe"):
+                    self.actions.append(tag)
+
+            def handle_data(self, data):
+                self.text.append(data)
+
+        parsed = ConfirmationParser()
+        parsed.feed(html)
+        visible_html = " ".join(parsed.text)
+        for sentence in (
+            "This email address was entered on the LevyQuant subscription page.",
+            "LevyQuant sends a morning briefing on macroeconomics, U.S. equities and quantitative research, around 7 a.m. New York time.",
+            "To subscribe, open the page below and select Confirm.",
+            "Review and confirm subscription",
+            "This link expires 48 hours after the request.",
+            "If you did not request this, ignore this email.",
+            "No subscription will start unless you confirm.",
+            "LevyQuant · sender&briefing@example.org",
+        ):
+            with self.subTest(sentence=sentence):
+                self.assertIn(sentence, plain)
+                self.assertIn(sentence, visible_html)
+        self.assertEqual(parsed.actions, [])
+        self.assertEqual(len(parsed.links), 1)
+        confirmation_url = parsed.links[0]
+        self.assertEqual(urlsplit(confirmation_url).path, "/confirm")
+        self.assertEqual(plain.count(confirmation_url), 1)
+        self.assertEqual(html.count('href="'), 1)
+        self.assertIn("sender&amp;briefing@example.org", html)
+        self.assertNotIn("sender&briefing@example.org", html)
+        self.assertEqual(self.service.list_subscribers()[0]["status"], "pending")
 
     def test_uncertain_and_crash_reservations_cannot_be_automatically_replayed(self):
         uncertain = Mock(side_effect=DeliveryUncertain("private details", stage="data"))

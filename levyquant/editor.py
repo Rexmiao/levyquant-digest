@@ -511,10 +511,10 @@ def editor_to_digest(editor: object, articles: list[dict], *, date: str, cutoff:
     if generation and generation["discarded_items"]:
         count = generation["discarded_items"]
         notices.append(
-            f"Excluded {count} editorial items that did not pass source-evidence validation; "
-            "the remaining items passed the unchanged validation rules."
+            f"Excluded {count} editorial items that failed source-evidence checks; "
+            "remaining items passed the same checks."
             if language == "en" else
-            f"已剔除 {count} 条未通过来源证据验证的编辑条目；其余条目均按相同规则重新验证。"
+            f"已剔除 {count} 条未通过来源证据检查的编辑条目；其余条目通过相同检查。"
         )
     digest = {"title": "LevyQuant Daily", "edition": edition, "date": date, "cutoff": cutoff,
             "language": language, "mode": mode, "demo": mode == "demo", "send_allowed": mode != "demo",

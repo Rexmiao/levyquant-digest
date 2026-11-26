@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import argparse
 from copy import deepcopy
-from datetime import datetime, timedelta, timezone
+from datetime import date as CalendarDate, datetime, timedelta, timezone
 from html import escape
 import hashlib
 import json
@@ -16,7 +16,7 @@ from zoneinfo import ZoneInfo
 from .editor import EditorError, editor_to_digest, generate_editor
 from .delivery_reports import COUNT_FIELDS, ERROR_TYPES, RESULT_CODES, record_run_report, summarize_edition
 from .feeds import DIAGNOSTIC_STATUSES, collect_sources
-from .render import render_digest
+from .render import RECIPIENT_FOOTER_SLOT, _safe_url, render_digest
 from .smtp_delivery import DeliveryError, DeliveryUncertain, prepare_message, send_one
 from .sources import enrich_articles
 from .source_settings import (
@@ -66,6 +66,17 @@ def recipients_from(value: str) -> list[str]:
 
 def recipient_key(address: str) -> str:
     return hashlib.sha256(address.casefold().encode()).hexdigest()
+
+
+def _briefing_subject(date: str) -> str:
+    months = ("January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December")
+    try:
+        moment = CalendarDate.fromisoformat(date)
+        if moment.isoformat() != date:
+            raise ValueError
+    except (ValueError, TypeError):
+        raise ConfigurationError("A valid briefing date is required") from None
+    return f"LevyQuant Morning Briefing — {months[moment.month - 1]} {moment.day}, {moment.year}"
 
 
 def validate_config(config: dict) -> None:
@@ -177,6 +188,44 @@ def build_public_inputs(articles: list[dict], max_characters: int) -> tuple[list
     return public, warnings
 
 
+def build_coverage_notices(base: list[str], cited_articles: list[dict], *,
+                           source_gaps: bool = False, shortened: bool = False,
+                           extra_notices: list[str] | None = None) -> list[str]:
+    """Describe actual cited material once; retain real processing exceptions."""
+    if not isinstance(base, list) or any(not isinstance(note, str) for note in base):
+        raise ConfigurationError("Coverage notices must be a list of text")
+    scopes = {article.get("content_scope") for article in cited_articles}
+    limits = []
+    if "rss_metadata_and_feed_excerpt" in scopes:
+        limits.append("Publisher feed excerpts are used without reading linked article bodies.")
+    if ("search_headline_and_link" in scopes
+            or any(article.get("media_type") == "headline_only" for article in cited_articles)):
+        limits.append("Search inputs provide headlines and links only.")
+    if ("podcast_episode_description" in scopes
+            or any(article.get("media_type") == "podcast" for article in cited_articles)):
+        limits.append("Podcasts use episode descriptions; audio and transcripts were not reviewed.")
+    if ("official_abstract" in scopes
+            or any(article.get("section") == "quant_research" for article in cited_articles)):
+        limits.append("Research summaries use abstracts or publication notices, not full-paper reviews or replications.")
+    notices = list(base)
+    if limits:
+        notices.append(" ".join(limits))
+    if source_gaps and shortened:
+        notices.append("Some source items or dates were unavailable; some excerpts were shortened.")
+    elif source_gaps:
+        notices.append("Some source items or dates were unavailable.")
+    elif shortened:
+        notices.append("Some source excerpts were shortened; consult the linked originals for full context.")
+    notices.extend(extra_notices or [])
+    result, seen = [], set()
+    for notice in notices:
+        text = " ".join(notice.split())
+        if text and text.casefold() not in seen:
+            seen.add(text.casefold())
+            result.append(text)
+    return result
+
+
 def source_diagnostics(sources: list[dict], reports: list[dict]) -> list[dict]:
     """Validate per-source collection outcomes and retain only public metadata."""
     if len(reports) != len(sources):
@@ -252,6 +301,11 @@ def deliver_edition(store, path: str, edition: dict, recipients: list[str], *, s
     if path != "editions/" + current_date + ".json":
         raise ConfigurationError("Delivery state path does not match the current edition")
     transport = transport or send_one
+    version = edition.get("copy_version", 1)
+    if type(version) is not int or version not in (1, 2):
+        raise ConfigurationError("Stored edition copy version is unsupported")
+    if version == 2 and edition["html"].count(RECIPIENT_FOOTER_SLOT) != 1:
+        raise ConfigurationError("The personalized footer slot is missing or duplicated")
     recipients = recipients_from(json.dumps(recipients))
     internal = recipients_from(json.dumps(internal_recipients)) if internal_recipients else []
     internal_keys = {address.casefold() for address in internal}
@@ -308,7 +362,35 @@ def deliver_edition(store, path: str, edition: dict, recipients: list[str], *, s
         if previous.get("status") == "rejected" and previous.get("retry_safe") is not True:
             continue
         message = messages[address]
-        if subscription_service is not None and address.casefold() not in internal_keys:
+        if version == 2:
+            if address.casefold() in internal_keys:
+                kind = "internal"
+            elif subscription_service is None:
+                raise StateError("The recipient authorization source could not be verified")
+            else:
+                kind = subscription_service.delivery_recipient_kind(address, internal)
+            if kind == "blocked":
+                skip(key)
+                continue
+            reasons = {"internal": "Operator archive copy",
+                       "confirmed": "This briefing is sent because you confirmed a LevyQuant subscription.",
+                       "authorized": "This briefing is sent to an address on LevyQuant’s authorized mailing list."}
+            if not isinstance(kind, str) or kind not in reasons:
+                raise StateError("The recipient authorization source could not be verified")
+            reason = reasons[kind]
+            personal = '<div data-digest-block="recipient" style="margin-top:12px;"><p style="margin:0 0 5px;">' + escape(reason) + '</p>'
+            text_footer, one_click = "\n\n" + reason + "\n", None
+            if kind != "internal":
+                url = subscription_service.unsubscribe_url(address)
+                if not _safe_url(url):
+                    raise StateError("The recipient unsubscribe link could not be verified")
+                one_click = subscription_service.one_click_unsubscribe_url(address)
+                personal += '<p style="margin:0;"><a href="' + escape(url, quote=True) + '">Unsubscribe from LevyQuant</a></p>'
+                text_footer += "Unsubscribe from LevyQuant:\n" + url + "\n"
+            personal += '</div>'
+            message = prepare_message(edition["subject"], edition["html"].replace(RECIPIENT_FOOTER_SLOT, personal),
+                edition["text"].rstrip() + text_footer, sender, address, edition["edition_id"], unsubscribe_url=one_click)
+        elif subscription_service is not None and address.casefold() not in internal_keys:
             url = subscription_service.unsubscribe_url(address)
             one_click = subscription_service.one_click_unsubscribe_url(address)
             footer = ('<hr><p style="font-size:12px;color:#5f6368;">'
@@ -448,13 +530,6 @@ def run(config: dict, mode: str, environment: dict, output: Path, *, moomoo_sett
         # User-facing notices describe coverage. Detailed network failures stay
         # local to the private workflow output, without recipient names or keys.
         notices = list(config["coverage_notices"])
-        notices.append("Coverage uses publisher feed excerpts and selected official-source material; linked originals may provide additional context.")
-        if (any(source.get("enabled", True) and source.get("kind") == "podcast" for source in sources)
-                or any(article.get("media_type") == "podcast" for article in articles)):
-            notices.append("Podcast coverage uses publisher-provided show notes or episode descriptions only; audio has not been listened to or transcribed.")
-        if warnings or enrichment_warnings:
-            notices.append("Some sources or linked pages were unavailable or had unusable metadata; available publisher feed excerpts and selected official-source material were used.")
-        notices.extend(context_warnings)
         prompt = (ROOT / "agent.prompt.md").read_text(encoding="utf-8")
         prompt += ("\nConfirmed runtime settings: write the full sectioned digest in English; retain original Chinese titles. "
                    "Combine reports on the same event across sections. Explain substantive updates to events in sent_history. "
@@ -474,14 +549,19 @@ def run(config: dict, mode: str, environment: dict, output: Path, *, moomoo_sett
             digest = {"title": config["title"], "edition": config["edition"], "date": date,
                       "cutoff": now.isoformat(), "language": "en", "mode": "live", "sections": [],
                       "coverage_warnings": notices + ["No new eligible items were available from the configured publisher feeds and selected official sources for this edition."]}
-        html, text = render_digest(digest, public)
+        digest["footer_personalization"] = True
         cited = {identifier for section in digest.get("sections", []) for item in section.get("items", [])
                  for identifier in item.get("source_ids", [])}
+        digest["coverage_warnings"] = build_coverage_notices(
+            notices, [article for article in public if article["id"] in cited],
+            source_gaps=bool(warnings or enrichment_warnings), shortened=bool(context_warnings),
+            extra_notices=[note for note in digest.get("coverage_warnings", []) if note not in notices])
+        html, text = render_digest(digest, public)
         events = [{"id": a["canonical_id"], "title": a["title"], "summary": (a["summary"] or a["content"])[:600], "date": date}
                   for a in public if a["id"] in cited]
         edition = {"edition_id": "levyquant-morning-" + date, "date": date,
                    "mode": "live" if mode == "send" else "preview", "validated": True,
-                   "subject": "LevyQuant Daily News Digest — Morning Edition, " + date,
+                   "subject": _briefing_subject(date), "copy_version": 2,
                    "html": html, "text": text, "events": events, "deliveries": {},
                    "created_at": now.isoformat(), "moomoo_settings_revision": settings_revision,
                    "source_count": successful_sources,

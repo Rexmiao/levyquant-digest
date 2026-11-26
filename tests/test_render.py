@@ -4,7 +4,7 @@ import copy
 from html.parser import HTMLParser
 import unittest
 
-from levyquant.render import render_digest
+from levyquant.render import RECIPIENT_FOOTER_SLOT, render_digest
 
 
 class ParsedHTML(HTMLParser):
@@ -158,6 +158,20 @@ class RenderDigestTests(unittest.TestCase):
         html, text = render_digest(self.digest, self.articles)
         self.assertIn("运行模式未确认 / 禁止发送", html)
         self.assertIn("本期没有可展示的内容", text)
+
+    def test_new_brand_and_optional_personalization_slot_are_only_in_the_footer(self):
+        self.digest.update(language="en", footer_personalization=True)
+        html, text = render_digest(self.digest, self.articles)
+        brand = "LevyQuant · Macro, U.S. equities and quantitative research · Source articles: 1"
+        self.assertIn(brand, text)
+        self.assertEqual(html.count(RECIPIENT_FOOTER_SLOT), 1)
+        footer_start = html.index('data-digest-block="footer"')
+        self.assertLess(footer_start, html.index(RECIPIENT_FOOTER_SLOT))
+        self.assertLess(html.index(RECIPIENT_FOOTER_SLOT), html.index("</td>", footer_start))
+        self.assertNotIn(RECIPIENT_FOOTER_SLOT, text)
+        self.assertNotIn("This briefing is sent", html + text)
+        self.digest["footer_personalization"] = False
+        self.assertNotIn(RECIPIENT_FOOTER_SLOT, render_digest(self.digest, self.articles)[0])
 
 
 if __name__ == "__main__":

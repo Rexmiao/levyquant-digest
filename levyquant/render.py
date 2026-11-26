@@ -9,6 +9,7 @@ from __future__ import annotations
 from html import escape
 from urllib.parse import urlsplit
 
+RECIPIENT_FOOTER_SLOT = "<!--LEVYQUANT_RECIPIENT_FOOTER-->"
 
 _LABELS = {
     "zh-CN": {
@@ -235,10 +236,11 @@ def render_digest(digest: dict, articles: list[dict]) -> tuple[str, str]:
             text_parts.append(f"- {warning}")
         html_parts.append('</td></tr>')
         text_parts.append("")
-    footer = f'LevyQuant Daily · {labels["source_count"]}: {len(linked_ids)}'
+    footer = f'LevyQuant · Macro, U.S. equities and quantitative research · {labels["source_count"]}: {len(linked_ids)}'
+    recipient_slot = RECIPIENT_FOOTER_SLOT if digest.get("footer_personalization") is True else ""
     html_parts.append(
         '<tr data-digest-block="footer"><td style="padding:16px 0 0;border-top:1px solid #dadce0;'
-        f'color:#70757a;font-size:12px;line-height:1.5;">{_html(footer)}</td></tr>'
+        f'color:#70757a;font-size:12px;line-height:1.5;">{_html(footer)}{recipient_slot}</td></tr>'
         '</table></td></tr></table></body></html>'
     )
     text_parts.append(footer)
