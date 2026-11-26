@@ -1,5 +1,5 @@
 ---
-title: LevyQuant Daily Digest
+title: LevyQuant Digest
 emoji: 📈
 colorFrom: blue
 colorTo: indigo
@@ -9,7 +9,7 @@ pinned: false
 short_description: Macro, U.S. equities and quantitative research
 ---
 
-# LevyQuant Daily Digest
+# LevyQuant Digest
 
 Public news preview, confirmed email subscriptions, unsubscribe controls, and a private owner administration page. The digest focuses on macroeconomics, U.S. equities, and quantitative research. Its main text is English, with original Chinese titles retained when relevant.
 
