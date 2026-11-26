@@ -80,15 +80,29 @@ web grounding, code execution, or delivery operation is available.
 """.strip()
 
 
+EDITOR_ERROR_CODES = frozenset((
+    "editor_validation_failed", "invalid_digest_metadata", "invalid_digest_date", "no_validated_items",
+    "request_too_large", "model_http_error", "model_network_error", "response_too_large",
+    "invalid_response", "no_usable_candidate", "incomplete_generation", "unsupported_response_content",
+    "empty_editorial_output", "missing_api_key", "invalid_model", "invalid_output_token_cap",
+    "missing_prompt", "invalid_timeout", "request_limit_reached",
+))
+
+
 class EditorError(RuntimeError):
     """A sanitized API/configuration error, containing no provider response body."""
+
+    def __init__(self, message: str, *, error_code: str | None = None, http_status: int | None = None):
+        super().__init__(message)
+        self.error_code = error_code if isinstance(error_code, str) and error_code in EDITOR_ERROR_CODES else None
+        self.http_status = http_status if type(http_status) is int and 100 <= http_status <= 599 else None
 
 
 class EditorValidationError(EditorError):
     def __init__(self, report: dict):
         self.report = report
         codes = sorted({item["code"] for item in report.get("errors", [])})
-        super().__init__("Editorial output was rejected: " + ", ".join(codes[:8]))
+        super().__init__("Editorial output was rejected: " + ", ".join(codes[:8]), error_code="editor_validation_failed")
 
 
 class GeneratedEditor(dict):
@@ -460,11 +474,11 @@ def editor_to_digest(editor: object, articles: list[dict], *, date: str, cutoff:
     if not report["valid"]:
         raise EditorValidationError(report)
     if language not in SECTION_TITLES or mode not in ("demo", "live"):
-        raise EditorError("Digest language and mode must be explicitly valid.")
+        raise EditorError("Digest language and mode must be explicitly valid.", error_code="invalid_digest_metadata")
     if mode == "live" and (not _day(date) or not _timestamp(cutoff)):
-        raise EditorError("A live digest requires a valid date and timezone-aware cutoff.")
+        raise EditorError("A live digest requires a valid date and timezone-aware cutoff.", error_code="invalid_digest_date")
     if mode == "live" and not report["counts"]["accepted_items"]:
-        raise EditorError("No validated live items are available; do not send an empty digest.")
+        raise EditorError("No validated live items are available; do not send an empty digest.", error_code="no_validated_items")
     sections = []
     for section in report["editor_output"]["sections"]:
         items = []
@@ -508,7 +522,7 @@ def _public_context(articles: list[dict], history: list | None) -> dict:
 def _request_model(payload: dict, api_key: str, model: str, timeout: float) -> str:
     encoded = json.dumps(payload, ensure_ascii=False, allow_nan=False).encode("utf-8")
     if len(encoded) > MAX_REQUEST_BYTES:
-        raise EditorError("Editorial request exceeds the configured input size cap.")
+        raise EditorError("Editorial request exceeds the configured input size cap.", error_code="request_too_large")
     endpoint = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
     req = request.Request(endpoint, data=encoded, method="POST", headers={
         "Content-Type": "application/json", "x-goog-api-key": api_key,
@@ -519,30 +533,31 @@ def _request_model(payload: dict, api_key: str, model: str, timeout: float) -> s
     except error.HTTPError as exc:
         status = int(exc.code)
         exc.close()
-        raise EditorError(f"Gemini request failed (HTTP {status}); no fallback or HTTP retry was attempted.") from None
+        raise EditorError(f"Gemini request failed (HTTP {status}); no fallback or HTTP retry was attempted.",
+                          error_code="model_http_error", http_status=status) from None
     except (error.URLError, TimeoutError, OSError):
-        raise EditorError("Gemini network request failed; no fallback or HTTP retry was attempted.") from None
+        raise EditorError("Gemini network request failed; no fallback or HTTP retry was attempted.", error_code="model_network_error") from None
     if len(raw) > MAX_RESPONSE_BYTES:
-        raise EditorError("Gemini response exceeded the configured size cap.")
+        raise EditorError("Gemini response exceeded the configured size cap.", error_code="response_too_large")
     try:
         body = json.loads(raw)
     except (ValueError, UnicodeError):
-        raise EditorError("Gemini returned an invalid API response.") from None
+        raise EditorError("Gemini returned an invalid API response.", error_code="invalid_response") from None
     if not isinstance(body, dict):
-        raise EditorError("Gemini returned an invalid API response.")
+        raise EditorError("Gemini returned an invalid API response.", error_code="invalid_response")
     candidates = body.get("candidates")
     if not isinstance(candidates, list) or len(candidates) != 1 or not isinstance(candidates[0], dict):
-        raise EditorError("Gemini returned no usable candidate; the request may have been blocked.")
+        raise EditorError("Gemini returned no usable candidate; the request may have been blocked.", error_code="no_usable_candidate")
     candidate = candidates[0]
     if candidate.get("finishReason") != "STOP":
-        raise EditorError("Gemini did not finish normally; no partial draft will be used.")
+        raise EditorError("Gemini did not finish normally; no partial draft will be used.", error_code="incomplete_generation")
     content = candidate.get("content", {})
     parts = content.get("parts", []) if isinstance(content, dict) else []
     if not isinstance(parts, list) or any(isinstance(part, dict) and "functionCall" in part for part in parts):
-        raise EditorError("Gemini returned unsupported content instead of an editorial object.")
+        raise EditorError("Gemini returned unsupported content instead of an editorial object.", error_code="unsupported_response_content")
     output = "".join(part["text"] for part in parts if isinstance(part, dict) and isinstance(part.get("text"), str) and part.get("thought") is not True)
     if not output.strip():
-        raise EditorError("Gemini returned no editorial text.")
+        raise EditorError("Gemini returned no editorial text.", error_code="empty_editorial_output")
     return output
 
 
@@ -559,15 +574,15 @@ def generate_editor(articles: list[dict], *, api_key: str | None = None,
     """
     key = api_key if api_key is not None else os.environ.get("GEMINI_API_KEY", "")
     if not isinstance(key, str) or not key.strip() or any(char.isspace() for char in key):
-        raise EditorError("Set GEMINI_API_KEY in the environment before using the editor.")
+        raise EditorError("Set GEMINI_API_KEY in the environment before using the editor.", error_code="missing_api_key")
     if not isinstance(model, str) or not re.fullmatch(r"gemini-[A-Za-z0-9._-]+", model):
-        raise EditorError("Invalid Gemini model identifier.")
+        raise EditorError("Invalid Gemini model identifier.", error_code="invalid_model")
     if isinstance(max_output_tokens, bool) or not isinstance(max_output_tokens, int) or not 128 <= max_output_tokens <= MAX_OUTPUT_TOKENS:
-        raise EditorError("Output token cap must be between 128 and 16384.")
+        raise EditorError("Output token cap must be between 128 and 16384.", error_code="invalid_output_token_cap")
     if not isinstance(prompt, str) or not prompt.strip():
-        raise EditorError("An editorial system prompt is required.")
+        raise EditorError("An editorial system prompt is required.", error_code="missing_prompt")
     if not isinstance(timeout, (int, float)) or isinstance(timeout, bool) or not 1 <= timeout <= 180:
-        raise EditorError("HTTP timeout must be between 1 and 180 seconds.")
+        raise EditorError("HTTP timeout must be between 1 and 180 seconds.", error_code="invalid_timeout")
     input_report = validate_editor({"sections": []}, articles)
     if not input_report["valid"]:
         raise EditorValidationError(input_report)
@@ -600,4 +615,4 @@ def generate_editor(articles: list[dict], *, api_key: str | None = None,
             {"role": "model", "parts": [{"text": output}]},
             {"role": "user", "parts": [{"text": json.dumps(repair, ensure_ascii=False)}]},
         ])
-    raise EditorError("Editorial request limit reached.")
+    raise EditorError("Editorial request limit reached.", error_code="request_limit_reached")

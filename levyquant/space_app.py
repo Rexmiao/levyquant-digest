@@ -19,7 +19,7 @@ from urllib.parse import urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 from . import daily
-from .editor import EditorError, EditorValidationError
+from .editor import EDITOR_ERROR_CODES, EditorError, EditorValidationError
 from .state_store import GitHubStateStore, LocalStateStore, StateConflict, StateError
 from .subscriptions import SubscriptionError, validate_email, validate_public_base_url
 
@@ -50,7 +50,7 @@ class AppError(RuntimeError):
 
 
 def _private_error_details(error: Exception) -> dict:
-    """Fixed diagnostic vocabulary; never expose messages, reports or class names."""
+    """Fixed diagnostics; never expose messages, reports or dynamic class names."""
     categories = ((EditorValidationError, "EditorValidationError"), (EditorError, "EditorError"),
                   (SubscriptionError, "SubscriptionError"), (StateConflict, "StateConflict"),
                   (StateError, "StateError"), (daily.ConfigurationError, "ConfigurationError"),
@@ -65,8 +65,13 @@ def _private_error_details(error: Exception) -> dict:
             result["issue_codes"] = sorted({issue["code"] for issue in errors[:1000]
                 if isinstance(issue, dict) and isinstance(issue.get("code"), str)
                 and issue["code"] in _EDITOR_ISSUE_CODES})
-    # EditorError currently carries no structured HTTP status. Do not recover
-    # status or any other diagnostic by parsing exception/provider text.
+    if isinstance(error, EditorError):
+        code, status = error.error_code, error.http_status
+        if isinstance(code, str) and code in EDITOR_ERROR_CODES:
+            result["error_code"] = code
+        if type(status) is int and 100 <= status <= 599:
+            result["http_status"] = status
+    # Structured attributes only; never parse exception or provider text.
     return result
 
 

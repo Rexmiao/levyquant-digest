@@ -285,6 +285,7 @@ class AppTests(unittest.TestCase):
         _, result = self.request("GET", "/api/admin/preview")
         self.assertEqual(result, {"status": "failed", "error": "preview_failed",
             "error_type": "EditorValidationError", "error_stage": "preview_pipeline",
+            "error_code": "editor_validation_failed",
             "issue_codes": ["unsupported_numeric_claim", "unsupported_precise_date"]})
         self.assertNotIn(sensitive, json.dumps(result))
         self.assertEqual(captured_out.getvalue() + captured_err.getvalue(), "")
@@ -302,6 +303,25 @@ class AppTests(unittest.TestCase):
                 _, result = self.request("GET", "/api/admin/preview")
                 self.assertEqual(result["error_type"], expected)
                 self.assertEqual(set(result), {"status", "error", "error_type", "error_stage"})
+                self.assertNotIn("private", json.dumps(result))
+
+    def test_preview_only_exposes_allowlisted_editor_code_and_integer_http_status(self):
+        sensitive = "private@example.org https://provider.example/?token=offline-private-token HTTP 403"
+        cases = [("model_http_error", 429, {"error_code": "model_http_error", "http_status": 429}),
+                 (sensitive, "403", {}), (sensitive, True, {}), (sensitive, 600, {})]
+        for code, status, metadata in cases:
+            with self.subTest(status=status):
+                error = EditorError(sensitive, error_code=code, http_status=status)
+                self.assertEqual(error.error_code, code if code == "model_http_error" else None)
+                self.assertEqual(error.http_status, 429 if type(status) is int and status == 429 else None)
+                # Simulate attributes overwritten by another caller; the HTTP
+                # boundary must independently enforce the same fixed contract.
+                error.error_code, error.http_status = code, status
+                self.app = self.make_app(preview_runner=Mock(side_effect=error))
+                self.app._run_preview()
+                _, result = self.request("GET", "/api/admin/preview")
+                self.assertEqual(result, {"status": "failed", "error": "preview_failed",
+                    "error_type": "EditorError", "error_stage": "preview_pipeline", **metadata})
                 self.assertNotIn("private", json.dumps(result))
 
     def test_subscriber_state_diagnostics_distinguish_init_and_registry_after_auth(self):

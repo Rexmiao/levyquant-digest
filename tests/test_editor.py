@@ -164,6 +164,8 @@ class EditorTests(unittest.TestCase):
                 generate_editor(self.articles, api_key=self.key, prompt="Digest")
         self.assertEqual(opened.call_count, 1)
         self.assertIn("HTTP 429", str(captured.exception))
+        self.assertEqual(captured.exception.error_code, "model_http_error")
+        self.assertEqual(captured.exception.http_status, 429)
         self.assertNotIn(self.key, str(captured.exception))
         self.assertNotIn("provider-body", str(captured.exception))
 
@@ -269,10 +271,14 @@ class EditorTests(unittest.TestCase):
             with self.assertRaises(EditorError) as captured:
                 generate_editor(self.articles, api_key=self.key, prompt="Digest")
         self.assertNotIn(self.key, str(captured.exception))
+        self.assertEqual(captured.exception.error_code, "model_network_error")
+        self.assertIsNone(captured.exception.http_status)
         self.assertEqual(opened.call_count, 1)
         with patch("levyquant.editor._OPEN", return_value=self.response(finish="MAX_TOKENS")) as opened:
-            with self.assertRaises(EditorError):
+            with self.assertRaises(EditorError) as captured:
                 generate_editor(self.articles, api_key=self.key, prompt="Digest")
+        self.assertEqual(captured.exception.error_code, "incomplete_generation")
+        self.assertIsNone(captured.exception.http_status)
         self.assertEqual(opened.call_count, 1)
 
     def test_env_key_and_preflight_configuration_fail_without_http(self):
