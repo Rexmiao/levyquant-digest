@@ -110,6 +110,8 @@ class EditorTests(unittest.TestCase):
     def test_gemini_request_uses_header_schema_cap_and_public_context_only(self):
         articles = deepcopy(self.articles)
         articles[0]["unrelated_private_field"] = "private-value-never-send"
+        articles[0].update(content_scope="official_abstract", media_type="research", date_basis="published",
+                           audio_url="https://example.org/unrequested-audio.mp3")
         history = [{"title": "Prior topic", "source_ids": ["old"], "recipient": "private@example.org", "smtp_password": "private-password"}]
         with patch("levyquant.editor._OPEN", return_value=self.response()) as opened:
             result = generate_editor(articles, api_key=self.key, prompt="English digest; preserve Chinese titles.", history=history, max_output_tokens=4096)
@@ -124,7 +126,16 @@ class EditorTests(unittest.TestCase):
         self.assertNotIn("private@example.org", body_text)
         self.assertNotIn("private-password", body_text)
         self.assertNotIn("private-value-never-send", body_text)
+        self.assertNotIn("unrequested-audio.mp3", body_text)
         body = json.loads(body_text)
+        source = json.loads(body["contents"][0]["parts"][0]["text"])["articles"][0]
+        self.assertEqual(source["content_scope"], "official_abstract")
+        self.assertEqual(source["media_type"], "research")
+        self.assertEqual(source["date_basis"], "published")
+        instructions = body["systemInstruction"]["parts"][0]["text"]
+        self.assertIn("not audio or a transcript", instructions)
+        self.assertIn("not a full paper or a replication", instructions)
+        self.assertIn("not independently verified full-article evidence", " ".join(instructions.split()))
         self.assertEqual(body["generationConfig"]["maxOutputTokens"], 4096)
         self.assertEqual(body["generationConfig"]["responseMimeType"], "application/json")
         self.assertIn("responseJsonSchema", body["generationConfig"])

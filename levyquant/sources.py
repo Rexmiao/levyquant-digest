@@ -24,6 +24,7 @@ ALLOWED_HOSTS = frozenset({
     "www.federalreserve.gov", "arxiv.org", "rss.arxiv.org", "www.sec.gov",
     "www.apple.com", "nvidianews.nvidia.com", "ir.nasdaq.com", "www.bls.gov",
 })
+_EXCERPT_SCOPES = frozenset({"rss_metadata_and_feed_excerpt", "podcast_episode_description", "official_abstract"})
 _VOID_TAGS = frozenset({"area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track", "wbr"})
 _HIDDEN_TAGS = frozenset({
     "head", "script", "style", "noscript", "svg", "nav", "header", "footer",
@@ -202,7 +203,9 @@ def enrich_articles(
     Identity, dates and original ``summary`` remain unchanged. ``source_text``
     is accompanied by ``content_scope`` and ``enrichment_status``. Unsupported
     hosts, SEC filings, PDFs, blocked pages and request failures retain the RSS
-    excerpt. At most four requests run concurrently, one per initial host;
+    excerpt. Configured feed-only publishers and podcast descriptions are
+    planned excerpt inputs: no body/audio request or failure warning is made.
+    At most four requests run concurrently, one per initial host;
     HTTP 401/403/429 blocks later requests to that host for this collection.
     """
     if timeout <= 0 or max_workers <= 0 or min_summary_chars < 0 or max_articles < 0:
@@ -210,11 +213,22 @@ def enrich_articles(
     output = []
     for article in articles:
         excerpt = str(article.get("summary") or "")
+        scope = article.get("content_scope")
+        if not isinstance(scope, str) or scope not in _EXCERPT_SCOPES:
+            scope = "rss_metadata_and_feed_excerpt"
+        if article.get("media_type") == "podcast":
+            scope = "podcast_episode_description"
         output.append({**article, "body": "", "source_text": excerpt,
-                       "content_scope": "rss_metadata_and_feed_excerpt", "enrichment_status": "retained_excerpt"})
+                       "content_scope": scope, "enrichment_status": "retained_excerpt"})
     warnings_by_index: dict[int, str] = {}
     jobs: list[tuple[int, str]] = []
     for index, article in enumerate(output):
+        if (article.get("retrieval") == "feed_excerpt_only" or article.get("media_type") == "podcast"
+                or article["content_scope"] == "podcast_episode_description"):
+            article["enrichment_status"] = "feed_excerpt_only"
+            if not article["source_text"]:
+                article["source_text"] = str(article.get("title") or "")
+            continue
         if len(article["source_text"]) >= min_summary_chars:
             article["enrichment_status"] = "excerpt_sufficient"
             continue

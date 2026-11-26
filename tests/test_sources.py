@@ -68,6 +68,48 @@ class HtmlExtractionTests(unittest.TestCase):
 
 class EnrichmentTests(unittest.TestCase):
     @patch("levyquant.sources.build_opener")
+    def test_planned_media_excerpts_and_podcast_descriptions_never_fetch_bodies_or_audio(self, build):
+        publisher = {**article("https://www.cnbc.com/example.html", summary=""),
+                     "retrieval": "feed_excerpt_only", "media_type": "publisher_feed"}
+        podcast = {**article("https://example.org/episode.mp3", summary="The episode introduction advertises a discussion of market research."),
+                   "media_type": "podcast", "content_scope": "podcast_episode_description",
+                   "audio_url": "https://example.org/episode.mp3"}
+        allowed_host_feed_only = {**article(), "retrieval": "feed_excerpt_only"}
+        result, warnings = enrich_articles([publisher, podcast, allowed_host_feed_only])
+        build.assert_not_called()
+        self.assertEqual(warnings, [])
+        self.assertTrue(all(row["enrichment_status"] == "feed_excerpt_only" and row["body"] == "" for row in result))
+        self.assertEqual(result[0]["source_text"], publisher["title"])
+        self.assertEqual(result[1]["content_scope"], "podcast_episode_description")
+        self.assertEqual(result[1]["source_text"], podcast["summary"])
+        self.assertEqual(result[1]["audio_url"], podcast["audio_url"])
+        self.assertNotIn("body", podcast)
+
+    @patch("levyquant.sources.build_opener")
+    def test_incoming_abstract_scope_survives_retention_without_claiming_full_paper(self, build):
+        abstract = {**article("https://arxiv.org/abs/example", summary="Research abstract material."),
+                    "content_scope": "official_abstract", "media_type": "research"}
+        result, warnings = enrich_articles([abstract], max_articles=0)
+        build.assert_not_called()
+        self.assertEqual(warnings, [])
+        self.assertEqual(result[0]["content_scope"], "official_abstract")
+        self.assertEqual(result[0]["source_text"], abstract["summary"])
+        self.assertEqual(result[0]["body"], "")
+
+    @patch("levyquant.sources.build_opener")
+    def test_feed_only_items_do_not_spend_official_enrichment_budget(self, build):
+        build.return_value.open.return_value = Response()
+        media = {**article("https://www.wsj.com/example.html"), "retrieval": "feed_excerpt_only"}
+        official = article()
+        result, warnings = enrich_articles([media, official], max_articles=1)
+        self.assertEqual(warnings, [])
+        self.assertEqual(build.return_value.open.call_count, 1)
+        self.assertEqual(build.return_value.open.call_args.args[0].full_url, official["url"])
+        self.assertEqual(result[0]["enrichment_status"], "feed_excerpt_only")
+        self.assertEqual(result[1]["enrichment_status"], "official_text_extracted")
+        self.assertEqual(result[1]["content_scope"], "official_article_text")
+
+    @patch("levyquant.sources.build_opener")
     def test_public_article_adds_source_text_without_rewriting_feed_dates_or_identity(self, build):
         opener = Mock()
         opener.open.return_value = Response()

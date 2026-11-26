@@ -62,6 +62,12 @@ each source's publication timestamp. Preserve
 the source time precision; publication time is not event time. Calendar/watchlist
 entries require a matching trusted article.event_time record; otherwise omit them.
 RSS excerpts are not a verified economic calendar or a complete earnings dataset.
+Respect content_scope and media_type. A podcast input is only an episode
+description, not audio or a transcript: do not claim to have listened or quote
+unprovided spoken statements. Describe the advertised topics as the episode
+description's claims. An official_abstract is not a full paper or a replication.
+Publisher headlines and feed excerpts are attributed source reports, not
+independently verified full-article evidence. Do not add unprovided body detail.
 Unless an article has matching upstream verified_numbers, omit financial amounts,
 percentages, estimates, performance metrics and other financial numeric claims.
 Other method/sample numbers also need exact quoted evidence. Do not calculate
@@ -489,7 +495,8 @@ def editor_to_digest(editor: object, articles: list[dict], *, date: str, cutoff:
 
 
 def _public_context(articles: list[dict], history: list | None) -> dict:
-    fields = ("id", "canonical_id", "source", "title", "url", "summary", "content", "published_at", "section", "verified_numbers", "event_time")
+    fields = ("id", "canonical_id", "source", "title", "url", "summary", "content", "published_at", "section", "verified_numbers", "event_time",
+              "content_scope", "media_type", "date_basis")
     public = [{key: article[key] for key in fields if key in article} for article in articles]
     history_fields = ("id", "event_id", "source_ids", "title", "summary", "date", "sent_at")
     previous = [{key: item[key] for key in history_fields if key in item}

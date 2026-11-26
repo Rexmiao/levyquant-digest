@@ -44,6 +44,14 @@ def edition(mode="live"):
     return value
 
 
+def diagnostic(identifier="official", status="ok", *, enabled=True, parsed=1, dated=1,
+               eligible=1, selected=1):
+    return {"id": identifier, "name": identifier, "enabled": enabled, "status": status,
+            "parsed": parsed, "dated": dated, "eligible": eligible, "selected": selected,
+            "latest_published": ARTICLE["published_at"] if dated else None,
+            "unknown_dates": parsed - dated, "future_dated": 0}
+
+
 class TestStore(LocalStateStore):
     def ensure_state_branch(self):
         pass
@@ -178,7 +186,13 @@ class InputAndPipelineTests(unittest.TestCase):
         patch("levyquant.daily.datetime", Clock).start()
         patch("levyquant.daily.ZoneInfo", return_value=timezone(timedelta(hours=-5))).start()
         patch("levyquant.daily.ROOT", self.root).start()
-        self.collect = patch("levyquant.daily.collect_sources", return_value=([deepcopy(ARTICLE)], [])).start()
+        self.collection_articles = [deepcopy(ARTICLE)]
+        self.collection_warnings = []
+        self.collection_reports = [diagnostic()]
+        def collect(sources, *, diagnostics, **kwargs):
+            diagnostics.extend(deepcopy(self.collection_reports))
+            return deepcopy(self.collection_articles), list(self.collection_warnings)
+        self.collect = patch("levyquant.daily.collect_sources", side_effect=collect).start()
         self.enrich = patch("levyquant.daily.enrich_articles", side_effect=lambda articles, **kwargs: (articles, [])).start()
         self.generate = patch("levyquant.daily.generate_editor", return_value=self.editor).start()
         self.smtp = patch("levyquant.daily.send_one", return_value={"status": "accepted"}).start()
@@ -198,6 +212,83 @@ class InputAndPipelineTests(unittest.TestCase):
         records = [{**ARTICLE, "id": str(index)} for index in range(30)]
         with self.assertRaisesRegex(daily.ConfigurationError, "every source"):
             daily.build_public_inputs(records, 1000)
+
+    def test_all_failed_or_unusable_sources_stop_before_editor_or_smtp_even_without_warnings(self):
+        self.collection_articles = []
+        for status in ("failed", "unusable_dates", "invalid_configuration"):
+            with self.subTest(status=status):
+                self.collection_reports = [diagnostic(status=status, parsed=0, dated=0, eligible=0, selected=0)]
+                with self.assertRaisesRegex(daily.ConfigurationError, "All enabled sources"):
+                    daily.run(self.config, "send", self.environment, self.root / "outputs")
+        self.generate.assert_not_called()
+        self.smtp.assert_not_called()
+        self.assertIsNone(TestStore(self.root / "remote").load(PATH))
+
+    def test_all_stale_or_empty_sources_allow_no_new_items_despite_multiple_warnings(self):
+        sources = [{"id": "stale", "enabled": True}, {"id": "empty", "enabled": True}]
+        (self.root / "manifest.json").write_text(json.dumps({"sources": sources}), encoding="utf-8")
+        self.collection_articles = []
+        self.collection_reports = [diagnostic("stale", "no_new_items", eligible=0, selected=0),
+                                   diagnostic("empty", "empty_feed", parsed=0, dated=0, eligible=0, selected=0)]
+        self.collection_warnings = ["empty: no usable entries.", "A source metadata warning.", "Another source metadata warning."]
+        result = daily.run(self.config, "send", self.environment, self.root / "outputs")
+        self.assertEqual(result["status"], "all_submissions_accepted")
+        self.generate.assert_not_called()
+        self.assertEqual(self.smtp.call_count, 2)
+        frozen = TestStore(self.root / "remote").load(PATH)
+        self.assertEqual(frozen["article_count"], 0)
+        self.assertEqual(frozen["source_count"], 2)
+        self.assertEqual(frozen["configured_source_count"], 2)
+        self.assertEqual(frozen["enabled_source_count"], 2)
+        self.assertIn("No new eligible items", frozen["text"])
+        self.assertIn("publisher feeds", frozen["text"])
+
+    def test_source_counts_exclude_failed_and_disabled_and_diagnostics_are_whitelisted(self):
+        sources = [{"id": "official", "enabled": True}, {"id": "broken", "enabled": True},
+                   {"id": "disabled", "enabled": False}]
+        (self.root / "manifest.json").write_text(json.dumps({"sources": sources}), encoding="utf-8")
+        self.collection_reports = [diagnostic(),
+            diagnostic("broken", "failed", parsed=0, dated=0, eligible=0, selected=0),
+            diagnostic("disabled", "disabled", enabled=False, parsed=0, dated=0, eligible=0, selected=0)]
+        self.collection_reports[0]["request_headers"] = {"Authorization": "private-marker-not-for-edition"}
+        self.collection_warnings = ["broken: request failed"]
+        daily.run(self.config, "preview", self.environment, self.root / "outputs")
+        frozen = TestStore(self.root / "outputs" / "preview-state").load(PATH)
+        self.assertEqual(frozen["source_count"], 1)
+        self.assertEqual(frozen["configured_source_count"], 3)
+        self.assertEqual(frozen["enabled_source_count"], 2)
+        self.assertEqual([row["status"] for row in frozen["source_diagnostics"]], ["ok", "failed", "disabled"])
+        self.assertNotIn("private-marker-not-for-edition", json.dumps(frozen))
+        self.assertNotIn("available official excerpts", frozen["text"])
+        self.assertIn("publisher feed excerpts", frozen["text"])
+
+    def test_podcast_scope_media_and_date_basis_reach_editor_without_audio_url(self):
+        self.collection_articles = [{**ARTICLE, "media_type": "podcast", "date_basis": "updated",
+                                     "content_scope": "podcast_episode_description",
+                                     "audio_url": "https://audio.example/episode.mp3"}]
+        daily.run(self.config, "preview", self.environment, self.root / "outputs")
+        public = self.generate.call_args.args[0][0]
+        self.assertEqual(public["media_type"], "podcast")
+        self.assertEqual(public["date_basis"], "updated")
+        self.assertEqual(public["content_scope"], "podcast_episode_description")
+        self.assertNotIn("audio_url", public)
+        self.assertIn("audio has not been listened to or transcribed", self.generate.call_args.kwargs["prompt"])
+        frozen = TestStore(self.root / "outputs" / "preview-state").load(PATH)
+        self.assertIn("show notes or episode descriptions only", frozen["text"])
+
+    def test_missing_diagnostics_or_all_disabled_sources_do_not_allow_sending(self):
+        self.collection_reports = []
+        with self.assertRaisesRegex(daily.ConfigurationError, "diagnostics are incomplete"):
+            daily.run(self.config, "send", self.environment, self.root / "outputs")
+        sources = [{"id": "disabled", "enabled": False}]
+        (self.root / "manifest.json").write_text(json.dumps({"sources": sources}), encoding="utf-8")
+        self.collection_reports = [diagnostic("disabled", "disabled", enabled=False,
+                                             parsed=0, dated=0, eligible=0, selected=0)]
+        self.collection_articles = []
+        with self.assertRaisesRegex(daily.ConfigurationError, "All enabled sources"):
+            daily.run(self.config, "send", self.environment, self.root / "outputs")
+        self.generate.assert_not_called()
+        self.smtp.assert_not_called()
 
     def test_preview_uses_real_editor_adapter_and_renderer_but_never_remote_state_or_smtp(self):
         result = daily.run(self.config, "preview", self.environment, self.root / "outputs")

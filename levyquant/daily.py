@@ -13,7 +13,7 @@ import sys
 from zoneinfo import ZoneInfo
 
 from .editor import EditorError, editor_to_digest, generate_editor
-from .feeds import collect_sources
+from .feeds import DIAGNOSTIC_STATUSES, collect_sources
 from .render import render_digest
 from .smtp_delivery import DeliveryError, DeliveryUncertain, prepare_message, send_one
 from .sources import enrich_articles
@@ -131,6 +131,7 @@ def build_public_inputs(articles: list[dict], max_characters: int) -> tuple[list
         selected = str(article.get("source_text") or article.get("body") or article.get("summary") or "")
         texts.append(selected)
         row = {key: article.get(key) for key in ("source", "title", "url", "published_at", "section", "content_scope")}
+        row.update({key: article[key] for key in ("media_type", "date_basis") if key in article})
         row.update({"id": f"article_{len(public) + 1:04d}", "canonical_id": canonical,
                     "summary": "", "content": ""})
         public.append(row)
@@ -170,6 +171,38 @@ def build_public_inputs(articles: list[dict], max_characters: int) -> tuple[list
     warnings = ["Some source excerpts were shortened for this edition; consult the linked originals for full context."] if any(
         len(row["content"]) < len(text) for row, text in zip(public, texts)) else []
     return public, warnings
+
+
+def source_diagnostics(sources: list[dict], reports: list[dict]) -> list[dict]:
+    """Validate per-source collection outcomes and retain only public metadata."""
+    if len(reports) != len(sources):
+        raise ConfigurationError("Source diagnostics are incomplete; no digest will be sent")
+    public = []
+    for index, (source, report) in enumerate(zip(sources, reports)):
+        enabled = bool(source.get("enabled", True))
+        identifier = str(source.get("id") or f"source_{index + 1}")
+        status = report.get("status") if isinstance(report, dict) else None
+        if (status not in DIAGNOSTIC_STATUSES or report.get("enabled") is not enabled
+                or report.get("id") != identifier or (status == "disabled") == enabled):
+            raise ConfigurationError("Source diagnostics are invalid; no digest will be sent")
+        counts = {key: report.get(key, 0) for key in (
+            "parsed", "dated", "eligible", "selected", "unknown_dates", "future_dated")}
+        if (any(type(value) is not int or value < 0 for value in counts.values())
+                or not counts["selected"] <= counts["eligible"] <= counts["dated"] <= counts["parsed"]
+                or counts["unknown_dates"] > counts["parsed"] or counts["future_dated"] > counts["dated"]):
+            raise ConfigurationError("Source diagnostic counts are invalid; no digest will be sent")
+        latest = report.get("latest_published")
+        if latest is not None:
+            try:
+                moment = datetime.fromisoformat(latest) if isinstance(latest, str) else None
+                if moment is None or moment.tzinfo is None or moment.utcoffset() is None:
+                    raise ValueError
+            except (ValueError, TypeError, OverflowError):
+                raise ConfigurationError("Source diagnostic timestamps are invalid; no digest will be sent") from None
+        public.append({"id": identifier,
+                       "name": str(source.get("name") or source.get("id") or f"Source {index + 1}"),
+                       "enabled": enabled, "status": status, **counts, "latest_published": latest})
+    return public
 
 
 def edition_fingerprint(edition: dict) -> str:
@@ -326,11 +359,16 @@ def run(config: dict, mode: str, environment: dict, output: Path) -> dict:
     history = store.load("history.json") or {"events": []}
     if edition is None:
         sources = read_json(ROOT / config["source_manifest"])["sources"]
+        reports = []
         articles, warnings = collect_sources(sources, since=now - timedelta(hours=config["lookback_hours"]),
                                             until=now, timeout=config["fetch_timeout_seconds"],
-                                            max_per_source=config["max_items_per_source"])
-        if not articles and len(warnings) >= len([s for s in sources if s.get("enabled", True)]):
-            raise ConfigurationError("All configured sources are unavailable or unusable; no digest will be sent")
+                                            max_per_source=config["max_items_per_source"], diagnostics=reports)
+        reports = source_diagnostics(sources, reports)
+        enabled_reports = [report for report in reports if report["enabled"]]
+        successful_sources = sum(report["status"] in {"ok", "no_new_items", "empty_feed"}
+                                 for report in enabled_reports)
+        if not enabled_reports or not successful_sources:
+            raise ConfigurationError("All enabled sources are unavailable or unusable; no digest will be sent")
         previous_ids = {item.get("id") for item in history["events"]}
         articles = [article for article in articles if article["id"] not in previous_ids]
         articles, enrichment_warnings = enrich_articles(articles, timeout=config["fetch_timeout_seconds"],
@@ -339,15 +377,20 @@ def run(config: dict, mode: str, environment: dict, output: Path) -> dict:
         # User-facing notices describe coverage. Detailed network failures stay
         # local to the private workflow output, without recipient names or keys.
         notices = list(config["coverage_notices"])
+        notices.append("Coverage uses publisher feed excerpts and selected official-source material; linked originals may provide additional context.")
+        if (any(source.get("enabled", True) and source.get("kind") == "podcast" for source in sources)
+                or any(article.get("media_type") == "podcast" for article in articles)):
+            notices.append("Podcast coverage uses publisher-provided show notes or episode descriptions only; audio has not been listened to or transcribed.")
         if warnings or enrichment_warnings:
-            notices.append("Some sources or linked pages could not be retrieved; available official excerpts were used.")
+            notices.append("Some sources or linked pages were unavailable or had unusable metadata; available publisher feed excerpts and selected official-source material were used.")
         notices.extend(context_warnings)
         prompt = (ROOT / "agent.prompt.md").read_text(encoding="utf-8")
         prompt += ("\nConfirmed runtime settings: write the full sectioned digest in English; retain original Chinese titles. "
                    "Combine reports on the same event across sections. Explain substantive updates to events in sent_history. "
                    "These inputs have no independently verified financial-number records or confirmed event-time records: "
                    "omit financial figures and calendar claims that require those records; never infer estimates or dates. "
-                   "An abstract supports only a description of the authors' stated research, not a replication or investment conclusion.")
+                   "An abstract supports only a description of the authors' stated research, not a replication or investment conclusion. "
+                   "Podcast show notes or episode descriptions support only those published descriptions; audio has not been listened to or transcribed.")
         if public:
             editor = generate_editor(public, api_key=environment["GEMINI_API_KEY"], model=config["model"],
                                      prompt=prompt, history=history["events"], max_output_tokens=config["max_output_tokens"])
@@ -359,7 +402,7 @@ def run(config: dict, mode: str, environment: dict, output: Path) -> dict:
         else:
             digest = {"title": config["title"], "edition": config["edition"], "date": date,
                       "cutoff": now.isoformat(), "language": "en", "mode": "live", "sections": [],
-                      "coverage_warnings": notices + ["No new eligible items in the configured official sources for this edition."]}
+                      "coverage_warnings": notices + ["No new eligible items were available from the configured publisher feeds and selected official sources for this edition."]}
         html, text = render_digest(digest, public)
         cited = {identifier for section in digest.get("sections", []) for item in section.get("items", [])
                  for identifier in item.get("source_ids", [])}
@@ -369,7 +412,9 @@ def run(config: dict, mode: str, environment: dict, output: Path) -> dict:
                    "mode": "live" if mode == "send" else "preview", "validated": True,
                    "subject": "LevyQuant Daily News Digest — Morning Edition, " + date,
                    "html": html, "text": text, "events": events, "deliveries": {},
-                   "created_at": now.isoformat(), "source_count": len(sources), "article_count": len(public),
+                   "created_at": now.isoformat(), "source_count": successful_sources,
+                   "configured_source_count": len(sources), "enabled_source_count": len(enabled_reports),
+                   "source_diagnostics": reports, "article_count": len(public),
                    "section_count": len(digest.get("sections", [])),
                    "warnings": warnings + enrichment_warnings}
         edition["content_sha256"] = edition_fingerprint(edition)
