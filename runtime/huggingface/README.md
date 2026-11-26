@@ -81,6 +81,8 @@ Pending public requests do not receive the daily digest. GitHub Actions sends th
 
 Visitors can read the currently published preview, request a subscription, confirm it, and unsubscribe. Anonymous requests cannot invoke the model, generate a new digest, or trigger a manual daily mailing. A generic request receipt is not proof that a confirmation email has arrived.
 
+The **中文 / EN** control switches the public and administrator interface, including subscription messages. Only that language preference is saved in browser storage; form entries and administrator credentials are not persisted by the switch. Published briefing content keeps its original language, identified beside the preview.
+
 The owner opens **`/admin`** and supplies `SPACE_ADMIN_TOKEN`. Every protected management API validates this token on the server through **`Authorization: Bearer ...`**. The `/admin` path itself is not an authentication mechanism; no administrative capability is granted just by knowing the URL. Tokens are not passed as URL query parameters.
 
 After configuration, the owner generates a real preview from the live sources, lets the existing schema and evidence checks validate it, then publishes the approved preview. Before a preview is published, the landing page must clearly indicate that a current real preview is unavailable; demo copy is not a live news edition. Do not bypass evidence failures by changing model providers or publishing an unchecked draft.
