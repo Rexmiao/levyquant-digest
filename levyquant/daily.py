@@ -97,7 +97,14 @@ def preflight(config: dict, mode: str, environment: dict) -> list[str]:
             raise ConfigurationError("Live delivery requires durable encrypted state in the intended GitHub repository")
         if not environment.get("STATE_ENCRYPTION_KEY"):
             raise ConfigurationError("STATE_ENCRYPTION_KEY secret is missing")
-        return recipients_from(environment.get("DIGEST_RECIPIENTS", ""))
+        subscribers = recipients_from(environment.get("DIGEST_RECIPIENTS", ""))
+        try:
+            internal = recipients_from(environment.get("DIGEST_INTERNAL_RECIPIENTS", ""))
+        except ConfigurationError:
+            raise ConfigurationError("DIGEST_INTERNAL_RECIPIENTS secret is missing or invalid") from None
+        # Both groups are required. Reuse the same parser to deduplicate across
+        # groups and apply its 100-recipient limit to the final combined list.
+        return recipients_from(json.dumps(subscribers + internal))
     return []
 
 

@@ -18,7 +18,7 @@
 
 公开仓库使用标准 GitHub 托管运行器的计算用量免费；较大型运行器和其他收费项目另有规则。在 [GitHub 个人 Billing](https://github.com/settings/billing) → **Budgets and alerts** 为 Actions 设置 **$0 的额外支出预算**，并启用 **Stop usage when budget limit is reached**。仅设置提醒不会停止超额使用；仓库变量也不控制 GitHub 或 Google 的账单。[Actions 用量规则](https://docs.github.com/en/actions/concepts/billing-and-usage)、[预算设置](https://docs.github.com/en/billing/how-tos/set-up-budgets)
 
-## 3. 填写五个 Secrets、两个 Variables
+## 3. 填写六个 Secrets、两个 Variables
 
 打开仓库 **Settings → Secrets and variables → Actions**。在 **Secrets** 页分别点 **New repository secret**，由你填写：
 
@@ -27,16 +27,21 @@
 | `GEMINI_API_KEY` | 第 2 步已确认免费项目的 Gemini API key |
 | `SMTP_USERNAME` | 已确认的 Gmail 发件邮箱；不要把实际地址写进公开配置 |
 | `SMTP_APP_PASSWORD` | 该发件邮箱的 Google 应用专用密码 |
-| `DIGEST_RECIPIENTS` | 已确认收件人的 JSON 数组，或逗号分隔地址 |
+| `DIGEST_RECIPIENTS` | 当前普通订阅名单的 JSON 数组，或逗号分隔地址；以后替换外部名单时修改这一项 |
+| `DIGEST_INTERNAL_RECIPIENTS` | 固定内部收件名单的 JSON 数组，或逗号分隔地址；始终保留，独立于普通订阅名单 |
 | `STATE_ENCRYPTION_KEY` | 独立生成的 32 字节随机密钥，以 URL-safe Base64 编码 |
 
-收件名单格式示例仅使用占位地址，实际值由你在 Secret 中填写：
+两份名单分别保存在对应 Secret 中，实际地址不写进公开配置。格式示例仅使用占位地址：
 
 ```json
 ["you@example.com","another@example.com"]
 ```
 
-也支持 `you@example.com,another@example.com`。不要把实际名单复制进公开代码、Issue、日志或 Summary。
+两项都支持这种 JSON 数组，也支持 `you@example.com,another@example.com`。正式 `send` 会合并两组，忽略大小写去重，再逐人投递；合并后的唯一地址总数最多 100。
+
+固定内部名单是正式发送的必需配置。`DIGEST_INTERNAL_RECIPIENTS` 缺失、为空或无效时，整轮发送会在任何网络操作前停止，避免漏掉内部收件人；普通 `DIGEST_RECIPIENTS` 也必须有效且非空。以后更换外部订阅名单只修改 `DIGEST_RECIPIENTS`，保留内部 Secret，因此内部收件人不会随外部名单替换而消失。不要把实际名单复制进公开代码、Issue、日志或 Summary。
+
+`preview`、`preview-email`、`smtp-test` 不依赖这两份订阅名单。后两种自测投递仍只发送到 `SMTP_USERNAME` 对应邮箱，不会自动把内部或外部名单带入测试。
 
 状态密钥须与 API key、邮箱密码分开生成。可在你自己的终端运行以下命令，输出只复制到 `STATE_ENCRYPTION_KEY` 并妥善私下保存，不发到聊天或提交进仓库：
 
@@ -60,9 +65,9 @@ python -c "import base64,secrets; print(base64.urlsafe_b64encode(secrets.token_b
 1. **`preview`**：生成当日草稿，不发邮件。公开 Summary 只显示非敏感结果与统计，不显示全文；不要把公开日志当作草稿阅读入口。
 2. **`smtp-test`**：仅向 `SMTP_USERNAME` 对应的发件邮箱发送一封连接测试邮件。检查收件箱和垃圾邮件，确认云端 SMTP 可用；本机连接成功不能代替云端验证。
 3. **可选 `preview-email`**：仅当当前部署版本的下拉菜单已提供该模式时使用。由你手动选择后，向 `SMTP_USERNAME` 对应邮箱发送当日草稿，供私下检查完整分栏、来源与语言；不向订阅名单发送。没有这个选项时，不要假定该功能已经上线，可先通过本地预览检查正文。
-4. 云端检查完成后，将仓库 Variable **`DIGEST_ENABLED` 改为 `true`**。每日计划目标为 **America/New_York 当地时间 07:00**，自动跟随夏令时，按 Secret 中的名单逐人发送。
+4. 云端检查完成后，将仓库 Variable **`DIGEST_ENABLED` 改为 `true`**。每日计划目标为 **America/New_York 当地时间 07:00**，自动跟随夏令时，按内部与普通订阅 Secret 合并后的名单逐人发送。
 
-手动 `send` 模式会真实向订阅名单发送当日稿件，同样受启用开关、密钥与发送记录检查约束。暂停日报时将 `DIGEST_ENABLED` 改回 `false`。日常无需每天手动点 Run workflow。
+手动 `send` 模式会真实向内部与普通订阅合并名单发送当日稿件，同样受启用开关、密钥与发送记录检查约束。暂停日报时将 `DIGEST_ENABLED` 改回 `false`。日常无需每天手动点 Run workflow。
 
 ## 加密状态与异常恢复
 

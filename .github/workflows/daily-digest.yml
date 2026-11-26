@@ -107,6 +107,7 @@ jobs:
           SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
           SMTP_APP_PASSWORD: ${{ secrets.SMTP_APP_PASSWORD }}
           DIGEST_RECIPIENTS: ${{ secrets.DIGEST_RECIPIENTS }}
+          DIGEST_INTERNAL_RECIPIENTS: ${{ secrets.DIGEST_INTERNAL_RECIPIENTS }}
           STATE_ENCRYPTION_KEY: ${{ secrets.STATE_ENCRYPTION_KEY }}
         run: python -m levyquant.daily --mode "$RUN_MODE" --config config/cloud.json
 

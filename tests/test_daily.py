@@ -166,6 +166,7 @@ class InputAndPipelineTests(unittest.TestCase):
             "GEMINI_API_KEY": "offline-model-key", "SMTP_APP_PASSWORD": "offline-password",
             "GITHUB_TOKEN": "offline-github-token", "GITHUB_REPOSITORY": "owner/private",
             "GITHUB_RUN_ID": "123", "GITHUB_RUN_ATTEMPT": "1", "DIGEST_RECIPIENTS": json.dumps(RECIPIENTS),
+            "DIGEST_INTERNAL_RECIPIENTS": json.dumps([RECIPIENTS[0]]),
             "STATE_ENCRYPTION_KEY": base64.urlsafe_b64encode(b"x" * 32).decode(),
             "SMTP_USERNAME": "sender@example.com"}
         self.editor = {"sections": [{"id": "geopolitics_macro", "items": [{
@@ -227,6 +228,84 @@ class InputAndPipelineTests(unittest.TestCase):
         self.factory.assert_not_called()
         self.collect.assert_not_called()
         self.smtp.assert_not_called()
+
+    def test_send_combines_internal_and_current_subscribers_without_case_duplicates(self):
+        environment = {**self.environment,
+            "DIGEST_RECIPIENTS": json.dumps(["ONE@example.org", "two@example.org", "TWO@EXAMPLE.ORG"]),
+            "DIGEST_INTERNAL_RECIPIENTS": "one@EXAMPLE.org,internal@example.org,INTERNAL@EXAMPLE.ORG"}
+        self.assertEqual(daily.preflight(self.config, "send", environment),
+                         ["ONE@example.org", "two@example.org", "internal@example.org"])
+        result = daily.run(self.config, "send", environment, self.root / "outputs")
+        self.assertEqual(result["recipient_count"], 3)
+        self.assertEqual(result["accepted"], 3)
+        self.assertEqual(self.smtp.call_count, 3)
+        self.assertEqual([str(call.args[0]["To"]) for call in self.smtp.call_args_list],
+                         ["one@example.org", "two@example.org", "internal@example.org"])
+        replacement = {**environment, "DIGEST_RECIPIENTS": "new-subscriber@example.org"}
+        self.assertEqual(daily.preflight(self.config, "send", replacement),
+                         ["new-subscriber@example.org", "one@EXAMPLE.org", "internal@example.org"])
+
+    def test_combined_recipient_limit_applies_after_cross_group_deduplication(self):
+        subscribers = [f"reader{index}@example.org" for index in range(99)]
+        environment = {**self.environment, "DIGEST_RECIPIENTS": json.dumps(subscribers),
+                       "DIGEST_INTERNAL_RECIPIENTS": json.dumps([subscribers[0].upper(), "internal@example.org"])}
+        self.assertEqual(len(daily.preflight(self.config, "send", environment)), 100)
+        environment["DIGEST_INTERNAL_RECIPIENTS"] = json.dumps(["internal@example.org", "second-internal@example.org"])
+        with self.assertRaisesRegex(daily.ConfigurationError, "More than 100"):
+            daily.run(self.config, "send", environment, self.root / "outputs")
+        self.factory.assert_not_called()
+        self.collect.assert_not_called()
+        self.smtp.assert_not_called()
+
+    def test_missing_or_invalid_internal_list_stops_send_before_any_network(self):
+        for value in (None, "", "   ", "[]", "{}", '["not-an-address"]', '["one@example.org",null]'):
+            with self.subTest(value=value):
+                environment = dict(self.environment)
+                if value is None:
+                    environment.pop("DIGEST_INTERNAL_RECIPIENTS")
+                else:
+                    environment["DIGEST_INTERNAL_RECIPIENTS"] = value
+                with self.assertRaisesRegex(daily.ConfigurationError, "DIGEST_INTERNAL_RECIPIENTS"):
+                    daily.run(self.config, "send", environment, self.root / "outputs")
+        self.factory.assert_not_called()
+        self.collect.assert_not_called()
+        self.generate.assert_not_called()
+        self.smtp.assert_not_called()
+
+    def test_valid_internal_group_does_not_replace_required_subscriber_validation(self):
+        for value in (None, "", "[]", "not-an-address"):
+            with self.subTest(value=value):
+                environment = dict(self.environment)
+                if value is None:
+                    environment.pop("DIGEST_RECIPIENTS")
+                else:
+                    environment["DIGEST_RECIPIENTS"] = value
+                with self.assertRaises(daily.ConfigurationError):
+                    daily.run(self.config, "send", environment, self.root / "outputs")
+        self.factory.assert_not_called()
+        self.collect.assert_not_called()
+        self.smtp.assert_not_called()
+
+    def test_preview_and_self_tests_do_not_depend_on_internal_recipient_secret(self):
+        for mode in ("preview", "preview-email", "smtp-test"):
+            for value in (None, "not-an-address"):
+                with self.subTest(mode=mode, value=value):
+                    environment = dict(self.environment)
+                    environment.pop("DIGEST_RECIPIENTS")
+                    if value is None:
+                        environment.pop("DIGEST_INTERNAL_RECIPIENTS")
+                    else:
+                        environment["DIGEST_INTERNAL_RECIPIENTS"] = value
+                    self.smtp.reset_mock()
+                    result = daily.run(self.config, mode, environment, self.root / "outputs")
+                    if mode == "preview":
+                        self.assertEqual(result["status"], "preview_ready_no_mail_sent")
+                        self.smtp.assert_not_called()
+                    else:
+                        self.assertTrue(result["test_to_sender_only"])
+                        self.assertEqual(self.smtp.call_count, 1)
+                        self.assertEqual(str(self.smtp.call_args.args[0]["To"]), environment["SMTP_USERNAME"])
+        self.factory.assert_not_called()
 
     def test_same_day_partial_rerun_reuses_frozen_body_without_recollecting_or_editing(self):
         self.smtp.side_effect = [DeliveryError("not exposed", stage="recipient", smtp_code=550), {"status": "accepted"}]
