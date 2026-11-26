@@ -77,6 +77,12 @@ python -c "import base64,secrets; print(base64.urlsafe_b64encode(secrets.token_b
 
 启用后，普通名单与已确认的公开订阅合并，退订的外部地址被排除，固定内部名单始终保留。公开注册只先排队确认邮件；点击邮件里的确认按钮后才加入公开订阅。确认邮件在 GitHub 上执行，另有每小时队列恢复。单次提交成功不等于实际收到邮件。
 
+### 统一管理 Moomoo 检索关键词
+
+部署含来源设置功能的版本后，在 HF 私人后台 `/admin` 修改并保存 Moomoo 关键词。设置写入现有 `delivery-state` 分支的 `settings/moomoo.json`，通过原有 `STATE_ENCRYPTION_KEY` 加密；HF 临时磁盘和浏览器存储不保存这份持久设置。GitHub 每日日报与 HF 新生成的预览读取同一份设置，`config/friend-sources.json` 仅提供首次未保存设置时的默认关键词。
+
+保存关键词不会自动生成预览或发送邮件。已经生成并冻结的当天正式版本保持原正文及发送记录；更新用于之后的新采集与新预览，不改写或重发当天已发送版本。Moomoo 仍只提供标题、来源时间和链接，不能据此扩写未取得的正文。此配置复用现有 GitHub token 与加密状态，不需要新增 Secret、权限或硬件；HF 保持 CPU Basic。
+
 ### 加密状态与异常恢复
 
 发送状态分支只保存 **AES-GCM 密文**，状态解密密钥来自 `STATE_ENCRYPTION_KEY`，不提交进该分支。收件人、发送记录及需要持久化的状态不得以明文发布。

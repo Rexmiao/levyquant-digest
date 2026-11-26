@@ -13,6 +13,7 @@ from unittest.mock import Mock, patch
 
 from levyquant import daily, space_app
 from levyquant.editor import EditorError, EditorValidationError
+from levyquant.source_settings import SETTINGS_PATH
 from levyquant.state_store import LocalStateStore, StateConflict, StateError
 from levyquant.subscriptions import SubscriptionError
 
@@ -99,7 +100,8 @@ class AppTests(unittest.TestCase):
         for method, path in (("GET", "/api/admin/subscribers"), ("GET", "/api/admin/status"),
                 ("GET", "/api/admin/preview"), ("POST", "/api/admin/send"),
                 ("POST", "/api/admin/preview"), ("POST", "/api/admin/publish"),
-                ("POST", "/api/admin/subscribers")):
+                ("POST", "/api/admin/subscribers"),
+                ("GET", "/api/admin/moomoo-settings"), ("POST", "/api/admin/moomoo-settings")):
             with self.subTest(path=path):
                 self.assert_error(401, lambda: self.request(method, path, {}, authorization="Bearer wrong"))
         self.store_factory.assert_not_called()
@@ -220,11 +222,62 @@ class AppTests(unittest.TestCase):
             if value not in ("true", "https://example.hf.space"):
                 self.assertNotIn(value, json.dumps(result))
 
+    def test_moomoo_defaults_and_saved_keywords_are_shared_across_app_instances(self):
+        _, defaults = self.request("GET", "/api/admin/moomoo-settings")
+        self.assertEqual(defaults, {"queries": ["NVIDIA", "Microsoft", "Federal Reserve"], "revision": 0})
+        self.store.save.assert_not_called()
+        status, saved = self.request("POST", "/api/admin/moomoo-settings",
+                                     {"queries": ["  Apple  ", "Inflation", "apple"], "revision": 0})
+        self.assertEqual((status, saved), (200, {"queries": ["Apple", "Inflation"], "revision": 1}))
+        second = self.make_app()
+        self.assertEqual(second.handle_api("GET", "/api/admin/moomoo-settings", authorization=AUTH),
+                         (200, saved))
+        self.assertEqual(set(self.store.values[SETTINGS_PATH]),
+                         {"schema_version", "queries", "revision", "updated_at"})
+        self.github.assert_not_called()
+        self.service_factory.assert_not_called()
+
+    def test_moomoo_stale_revision_and_remote_conflict_never_overwrite(self):
+        body = {"queries": ["Apple"], "revision": 0}
+        self.request("POST", "/api/admin/moomoo-settings", body)
+        before = self.store.save.call_count
+        self.assert_error(409, lambda: self.request("POST", "/api/admin/moomoo-settings", body))
+        self.assertEqual(self.store.save.call_count, before)
+        self.assertEqual(self.store.values[SETTINGS_PATH]["queries"], ["Apple"])
+        self.store.save.side_effect = StateConflict("provider payload must not appear")
+        self.assert_error(409, lambda: self.request("POST", "/api/admin/moomoo-settings",
+                                                   {"queries": ["Microsoft"], "revision": 1}))
+        self.assertEqual(self.store.save.call_count, before + 1)
+
+    def test_invalid_moomoo_requests_are_rejected_before_state_access(self):
+        for body in ({}, {"queries": [], "revision": 0}, {"queries": ["x"] * 5, "revision": 0},
+                     {"queries": ["x\nsecret"], "revision": 0}, {"queries": ["x" * 201], "revision": 0},
+                     {"queries": ["x"], "revision": True}, {"queries": ["x"], "revision": -1},
+                     {"queries": ["x"], "revision": 0, "url": "https://untrusted.example"}):
+            with self.subTest(body=body):
+                self.assert_error(400, lambda: self.request("POST", "/api/admin/moomoo-settings", body))
+        self.store_factory.assert_not_called()
+        self.store.save.assert_not_called()
+
+    def test_unreadable_moomoo_settings_block_preview_without_using_default_queries(self):
+        self.store.load.side_effect = StateError("sensitive@example.org secret-key")
+        runner = Mock()
+        self.app = self.make_app(preview_runner=runner)
+        self.app._run_preview()
+        _, state = self.request("GET", "/api/admin/preview")
+        self.assertEqual(state, {"status": "failed", "error": "preview_failed",
+                               "error_type": "StateError", "error_stage": "source_settings_read"})
+        self.assertNotIn("sensitive", json.dumps(state))
+        runner.assert_not_called()
+
     def test_preview_thread_is_single_concurrent_and_receives_no_smtp_credentials(self):
         entered, release = threading.Event(), threading.Event()
         observed = []
-        def runner(config, mode, environment, output):
+        snapshots = []
+        self.request("POST", "/api/admin/moomoo-settings", {"queries": ["Apple", "Inflation"], "revision": 0})
+        def runner(config, mode, environment, output, *, moomoo_settings):
             observed.append((mode, dict(environment)))
+            snapshots.append(deepcopy(moomoo_settings))
             entered.set()
             release.wait(3)
             edition = {**PREVIEW, "edition_id": "levyquant-morning-" + PREVIEW["date"],
@@ -244,8 +297,9 @@ class AppTests(unittest.TestCase):
         self.wait_preview()
         self.assertEqual(observed, [("preview", {"GEMINI_API_KEY": ENV["GEMINI_API_KEY"],
                                                 "GEMINI_FREE_TIER_CONFIRMED": "true"})])
+        self.assertEqual(snapshots, [{"queries": ["Apple", "Inflation"], "revision": 1}])
         _, result = self.request("GET", "/api/admin/preview")
-        self.assertEqual(result, {"status": "ready", "preview": PREVIEW})
+        self.assertEqual(result, {"status": "ready", "preview": PREVIEW, "moomoo_settings_revision": 1})
         self.assertEqual(self.request("POST", "/api/admin/publish", {}),
                          (200, {"status": "published", "date": PREVIEW["date"]}))
         self.assertEqual(self.store.values[space_app.PUBLIC_PATH], PREVIEW)

@@ -258,6 +258,46 @@
   "privatePreviewTitle": "私人日报预览",
   "adminPublicLink": "打开公开订阅页"
 });
+  Object.assign(TEXT.en, {
+    moomooSourcesEyebrow: 'NEWS SOURCES',
+    moomooSettingsTitle: 'Moomoo search keywords',
+    moomooSettingsCopy: "Choose the companies or topics to look for in Moomoo's public news search.",
+    moomooApplyNotice: 'Saved keywords apply to the next website preview and new daily editions. Editions already sent stay unchanged. Saving does not send email.',
+    moomooQueriesLabel: 'Search keywords',
+    moomooQueriesHelp: 'One keyword or phrase per line. Use 1–4 lines, up to 200 characters each.',
+    moomooQueriesPlaceholder: 'Federal Reserve\nApple\nNVIDIA',
+    moomooSave: 'Save keywords',
+    moomooReload: 'Reload saved keywords',
+    moomooReloadNotice: 'Reloading replaces unsaved edits with the saved keywords.',
+    moomooLoading: 'Loading saved keywords…',
+    moomooLoaded: 'Saved keywords loaded.',
+    moomooDirty: 'Unsaved changes.',
+    moomooSaving: 'Saving keywords…',
+    moomooSaved: 'Keywords saved. They will be used for the next preview and new editions.',
+    moomooConflict: 'Another session changed these keywords. Refresh status to keep this draft and load the latest version, or reload saved keywords to replace it.',
+    moomooUnavailable: 'Keywords could not be loaded or the save could not be verified. Your draft is kept. Reload saved keywords or refresh status before saving.',
+    moomooInvalid: 'Enter 1–4 nonempty lines, up to 200 characters per line, without control characters.'
+  });
+  Object.assign(TEXT.zh, {
+    moomooSourcesEyebrow: '新闻来源',
+    moomooSettingsTitle: 'Moomoo 搜索关键词',
+    moomooSettingsCopy: '设置要在 Moomoo 公开新闻中搜索的公司或主题。',
+    moomooApplyNotice: '保存后用于下一次网页预览与每日新稿；已发送版本保持不变。保存不会发送邮件。',
+    moomooQueriesLabel: '搜索关键词',
+    moomooQueriesHelp: '每行一个关键词或短语，共 1–4 行，每行最多 200 个字符。',
+    moomooQueriesPlaceholder: '美联储\nApple\nNVIDIA',
+    moomooSave: '保存关键词',
+    moomooReload: '重新加载已保存关键词',
+    moomooReloadNotice: '重新加载会用已保存的关键词替换未保存草稿。',
+    moomooLoading: '正在加载已保存关键词…',
+    moomooLoaded: '已加载保存的关键词。',
+    moomooDirty: '有尚未保存的修改。',
+    moomooSaving: '正在保存关键词…',
+    moomooSaved: '关键词已保存，将用于下一次预览与每日新稿。',
+    moomooConflict: '另一管理会话已修改关键词。点击“刷新状态”可保留草稿并读取最新版本；或重新加载已保存关键词以替换草稿。',
+    moomooUnavailable: '无法加载关键词或核验保存结果。草稿已保留，请重新加载已保存关键词或刷新状态后再保存。',
+    moomooInvalid: '请输入 1–4 行非空关键词，每行最多 200 个字符，且不含控制字符。'
+  });
   const STATE_KEYS = {
     pending: 'statePending', confirmed: 'stateConfirmed', seeded: 'stateSeeded',
     suppressed: 'stateSuppressed', unsubscribed: 'stateUnsubscribed',
@@ -266,10 +306,13 @@
     skipped: 'stateSkipped', timed_out: 'stateTimedOut', waiting: 'stateWaiting',
     requested: 'stateRequested', action_required: 'stateActionRequired'
   };
+  const MOOMOO_QUERY_CONTROL_CHARS = /[\p{Cc}\p{Cf}\p{Cs}\p{Zl}\p{Zp}]/u;
   let language = 'en';
   let adminToken = '';
   let adminGeneration = 0;
   let previewTimer = null;
+  let moomooLoadSequence = 0;
+  let moomooSettings = emptyMoomooSettings();
   const currentMessages = new Map();
   const pendingSubscriberActions = new Set();
   const view = {
@@ -367,6 +410,7 @@
       if (view.adminStatus) renderAdminStatus();
       renderSubscribers();
       renderRuns();
+      renderMoomooSettings();
     } else {
       renderPublicState();
       renderFlow();
@@ -472,6 +516,12 @@
     view.subscribersUnavailable = false;
     view.runsUnavailable = false;
     pendingSubscriberActions.clear();
+    moomooLoadSequence += 1;
+    moomooSettings.draft = '';
+    moomooSettings.savedQueries = [];
+    moomooSettings.revision = null;
+    moomooSettings = emptyMoomooSettings();
+    renderMoomooSettings();
     $('admin-token').value = '';
     $('admin-dashboard').hidden = true;
     $('admin-login').hidden = false;
@@ -565,6 +615,99 @@
       t('adminMissing', {names: status.missing.join(language === 'zh' ? '、' : ', ')}) : t('adminConnected');
     if (view.subscribersUnavailable) $('admin-status').textContent += ' ' + t('stateReadFailed');
   }
+  function emptyMoomooSettings() {
+    return {status: 'unavailable', revision: null, savedQueries: [], draft: ''};
+  }
+  function moomooQueriesFromDraft(draft) {
+    const lines = draft.split(/\r?\n/);
+    if (lines.some(value => MOOMOO_QUERY_CONTROL_CHARS.test(value))) return null;
+    const queries = lines.map(value => value.trim()).filter(Boolean);
+    if (queries.length < 1 || queries.length > 4 || queries.some(value =>
+      Array.from(value).length > 200)) return null;
+    return queries;
+  }
+  function moomooSettingsResponse(value) {
+    if (!value || !Array.isArray(value.queries) || value.queries.length < 1 || value.queries.length > 4 ||
+      !Number.isSafeInteger(value.revision) || value.revision < 0 || value.queries.some(query =>
+        typeof query !== 'string' || !query || query !== query.trim() || Array.from(query).length > 200 ||
+        MOOMOO_QUERY_CONTROL_CHARS.test(query))) throw errorFor('moomooUnavailable');
+    return {queries: [...value.queries], revision: value.revision};
+  }
+  function moomooDraftIsDirty(state = moomooSettings) {
+    const queries = moomooQueriesFromDraft(state.draft);
+    return queries === null || JSON.stringify(queries) !== JSON.stringify(state.savedQueries);
+  }
+  function renderMoomooSettings() {
+    const field = $('moomoo-queries');
+    if (!field) return;
+    const state = moomooSettings;
+    const busy = ['loading', 'saving'].includes(state.status);
+    const blocked = ['unavailable', 'conflict', 'invalid'].includes(state.status);
+    const valid = moomooQueriesFromDraft(state.draft) !== null;
+    if (field.value !== state.draft) field.value = state.draft;
+    field.disabled = !adminToken || state.revision === null || busy;
+    field.setAttribute('aria-invalid', String(state.status === 'invalid'));
+    $('moomoo-settings-form').setAttribute('aria-busy', String(busy));
+    $('moomoo-save-button').disabled = !adminToken || busy || blocked || !valid ||
+      state.revision === null || !moomooDraftIsDirty(state);
+    $('moomoo-save-button').textContent = t(state.status === 'saving' ? 'moomooSaving' : 'moomooSave');
+    $('moomoo-refresh-button').disabled = !adminToken || busy;
+    const statusKeys = {loading: 'moomooLoading', loaded: 'moomooLoaded', dirty: 'moomooDirty',
+      saving: 'moomooSaving', saved: 'moomooSaved', conflict: 'moomooConflict',
+      unavailable: 'moomooUnavailable', invalid: 'moomooInvalid'};
+    const statusNode = $('moomoo-settings-status');
+    statusNode.textContent = adminToken ? t(statusKeys[state.status] || 'moomooUnavailable') : '';
+    statusNode.classList.toggle('error', ['conflict', 'unavailable', 'invalid'].includes(state.status));
+    statusNode.classList.toggle('success', state.status === 'saved');
+  }
+  async function loadMoomooSettings({replaceDraft = false} = {}) {
+    if (!adminToken || moomooSettings.status === 'saving') return;
+    const generation = adminGeneration;
+    const sequence = ++moomooLoadSequence;
+    const state = moomooSettings;
+    const keepDraft = !replaceDraft && state.revision !== null && moomooDraftIsDirty(state);
+    const draft = state.draft;
+    state.status = 'loading';
+    renderMoomooSettings();
+    try {
+      const result = moomooSettingsResponse(await api('/api/admin/moomoo-settings', {admin: true}));
+      if (generation !== adminGeneration || sequence !== moomooLoadSequence || state !== moomooSettings) return;
+      state.revision = result.revision;
+      state.savedQueries = result.queries;
+      state.draft = keepDraft ? draft : result.queries.join('\n');
+      state.status = moomooDraftIsDirty(state) ? 'dirty' : 'loaded';
+      renderMoomooSettings();
+    } catch (error) {
+      if (error.stale || generation !== adminGeneration || sequence !== moomooLoadSequence || state !== moomooSettings) return;
+      state.status = 'unavailable';
+      renderMoomooSettings();
+    }
+  }
+  async function saveMoomooSettings() {
+    const state = moomooSettings;
+    const queries = moomooQueriesFromDraft(state.draft);
+    if (!adminToken || state.revision === null || !queries || !moomooDraftIsDirty(state) ||
+      ['loading', 'saving', 'unavailable', 'conflict', 'invalid'].includes(state.status)) return;
+    const generation = adminGeneration;
+    const revision = state.revision;
+    state.status = 'saving';
+    renderMoomooSettings();
+    try {
+      const result = moomooSettingsResponse(await api('/api/admin/moomoo-settings', {
+        method: 'POST', admin: true, body: {queries, revision}
+      }));
+      if (generation !== adminGeneration || state !== moomooSettings) return;
+      if (result.revision !== revision + 1) throw errorFor('moomooUnavailable');
+      state.revision = result.revision;
+      state.savedQueries = result.queries;
+      state.draft = result.queries.join('\n');
+      state.status = 'saved';
+    } catch (error) {
+      if (error.stale || generation !== adminGeneration || state !== moomooSettings) return;
+      state.status = error.status === 409 ? 'conflict' : error.status === 400 ? 'invalid' : 'unavailable';
+    }
+    if (generation === adminGeneration && state === moomooSettings) renderMoomooSettings();
+  }
   async function refreshAdmin() {
     const status = await api('/api/admin/status', {admin: true});
     view.adminStatus = status;
@@ -581,6 +724,9 @@
       view.subscribersUnavailable = true;
     }
     renderSubscribers(); renderAdminStatus();
+    // Source settings have their own loading/error state and never block the
+    // existing subscriber, preview or delivery controls.
+    loadMoomooSettings();
   }
   async function pollPreview(attempt = 0) {
     try {
@@ -606,6 +752,21 @@
     }
   }
   function adminPage() {
+    $('moomoo-queries').addEventListener('input', event => {
+      const state = moomooSettings;
+      if (['loading', 'saving'].includes(state.status)) return;
+      state.draft = event.target.value;
+      if (!['conflict', 'unavailable'].includes(state.status)) {
+        state.status = !moomooQueriesFromDraft(state.draft) ? 'invalid' :
+          moomooDraftIsDirty(state) ? 'dirty' : 'loaded';
+      }
+      renderMoomooSettings();
+    });
+    $('moomoo-settings-form').addEventListener('submit', event => {
+      event.preventDefault();
+      saveMoomooSettings();
+    });
+    $('moomoo-refresh-button').addEventListener('click', () => loadMoomooSettings({replaceDraft: true}));
     $('login-form').addEventListener('submit', async event => {
       event.preventDefault();
       adminGeneration += 1;

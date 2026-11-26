@@ -16,6 +16,7 @@ from levyquant import daily
 from levyquant.smtp_delivery import DeliveryError, DeliveryUncertain
 from levyquant.state_store import GitHubStateStore, LocalStateStore, StateConflict, StateError
 from levyquant.subscriptions import SubscriptionService
+from levyquant.source_settings import SETTINGS_PATH, SourceSettingsError, write_moomoo_settings
 
 
 NOW = datetime(2026, 11, 25, 12, tzinfo=timezone.utc)
@@ -197,6 +198,119 @@ class InputAndPipelineTests(unittest.TestCase):
         self.generate = patch("levyquant.daily.generate_editor", return_value=self.editor).start()
         self.smtp = patch("levyquant.daily.send_one", return_value={"status": "accepted"}).start()
         self.factory = patch("levyquant.daily.GitHubStateStore", side_effect=lambda *args, **kwargs: TestStore(self.root / "remote")).start()
+
+    def enable_moomoo_source(self):
+        defaults = ["Default topic", "Another topic", "Example policy"]
+        sources = [{"id": "official", "enabled": True},
+            {"id": "moomoo_news_search", "kind": "moomoo_search", "enabled": True,
+             "queries": defaults, "url": "https://ai-news-search.moomoo.com/news_search", "search_size": 4},
+            {"id": "other_moomoo", "kind": "moomoo_search", "enabled": False,
+             "queries": ["Unrelated fixed query"]}]
+        (self.root / "manifest.json").write_text(json.dumps({"sources": sources}), encoding="utf-8")
+        self.collection_reports = [diagnostic(),
+            diagnostic("moomoo_news_search", "empty_feed", parsed=0, dated=0, eligible=0, selected=0),
+            diagnostic("other_moomoo", "disabled", enabled=False, parsed=0, dated=0, eligible=0, selected=0)]
+        return sources, defaults
+
+    def test_send_uses_shared_keywords_only_on_fixed_source_and_freezes_revision(self):
+        original, defaults = self.enable_moomoo_source()
+        store = TestStore(self.root / "remote")
+        write_moomoo_settings(store, ["Saved topic"], 0, defaults)
+        daily.run(self.config, "send", self.environment, self.root / "outputs",
+                  moomoo_settings={"queries": ["Not authoritative for send"], "revision": 99})
+        sources = self.collect.call_args.args[0]
+        expected = deepcopy(original)
+        expected[1]["queries"] = ["Saved topic"]
+        self.assertEqual(sources, expected)
+        self.assertEqual(json.loads((self.root / "manifest.json").read_text())["sources"], original)
+        frozen = TestStore(self.root / "remote").load(PATH)
+        self.assertEqual(frozen["moomoo_settings_revision"], 1)
+        self.assertEqual(self.factory.call_count, 1)
+
+    def test_preview_and_preview_email_read_the_same_remote_keyword_settings(self):
+        _, defaults = self.enable_moomoo_source()
+        write_moomoo_settings(TestStore(self.root / "remote"), ["Shared topic"], 0, defaults)
+        for mode in ("preview", "preview-email"):
+            with self.subTest(mode=mode):
+                output = self.root / mode
+                result = daily.run(self.config, mode, self.environment, output)
+                self.assertEqual(self.collect.call_args.args[0][1]["queries"], ["Shared topic"])
+                self.assertEqual(TestStore(output / "preview-state").load(PATH)["moomoo_settings_revision"], 1)
+                if mode == "preview":
+                    self.assertEqual(result["moomoo_settings_revision"], 1)
+                    self.assertNotIn("queries", result)
+        self.assertEqual(self.smtp.call_count, 1)
+        self.assertEqual(str(self.smtp.call_args.args[0]["To"]), "sender@example.com")
+
+    def test_credential_free_preview_snapshot_is_validated_and_does_not_open_remote_store(self):
+        self.enable_moomoo_source()
+        environment = {key: value for key, value in self.environment.items()
+                       if key not in ("GITHUB_TOKEN", "GITHUB_REPOSITORY", "STATE_ENCRYPTION_KEY")}
+        snapshot = {"queries": [" Local topic ", "local topic"], "revision": 7}
+        result = daily.run(self.config, "preview", environment, self.root / "outputs", moomoo_settings=snapshot)
+        self.assertEqual(self.collect.call_args.args[0][1]["queries"], ["Local topic"])
+        self.assertEqual(result["moomoo_settings_revision"], 7)
+        self.assertEqual(snapshot["queries"], [" Local topic ", "local topic"])
+        self.factory.assert_not_called()
+        self.smtp.assert_not_called()
+
+    def test_standalone_preview_uses_manifest_defaults_only_without_remote_configuration(self):
+        original, _ = self.enable_moomoo_source()
+        environment = {key: value for key, value in self.environment.items()
+                       if key not in ("GITHUB_TOKEN", "GITHUB_REPOSITORY", "STATE_ENCRYPTION_KEY")}
+        result = daily.run(self.config, "preview", environment, self.root / "outputs")
+        self.assertEqual(self.collect.call_args.args[0], original)
+        self.assertEqual(result["moomoo_settings_revision"], 0)
+        self.factory.assert_not_called()
+        self.smtp.assert_not_called()
+
+    def test_bad_shared_record_or_partial_remote_configuration_blocks_before_collection(self):
+        self.enable_moomoo_source()
+        store = TestStore(self.root / "remote")
+        store.load(SETTINGS_PATH)
+        store.save(SETTINGS_PATH, {"queries": []})
+        for mode in ("send", "preview", "preview-email"):
+            with self.subTest(mode=mode), self.assertRaises(StateError):
+                daily.run(self.config, mode, self.environment, self.root / mode)
+        self.collect.assert_not_called()
+        self.generate.assert_not_called()
+        self.smtp.assert_not_called()
+        environment = {key: value for key, value in self.environment.items() if key != "STATE_ENCRYPTION_KEY"}
+        with self.assertRaisesRegex(daily.ConfigurationError, "complete remote state"):
+            daily.run(self.config, "preview", environment, self.root / "partial")
+        self.collect.assert_not_called()
+
+    def test_invalid_preview_snapshot_never_collects_or_reads_remote_state(self):
+        self.enable_moomoo_source()
+        for snapshot in ({"queries": [], "revision": 0}, {"queries": ["Topic"], "revision": True},
+                         {"queries": ["Topic"], "revision": 0, "secret": "not permitted"}):
+            with self.subTest(snapshot=snapshot), self.assertRaises(SourceSettingsError):
+                daily.run(self.config, "preview", self.environment, self.root / "outputs", moomoo_settings=snapshot)
+        self.factory.assert_not_called()
+        self.collect.assert_not_called()
+        self.smtp.assert_not_called()
+
+    def test_changed_keywords_never_rebuild_or_resend_an_accepted_frozen_edition(self):
+        _, defaults = self.enable_moomoo_source()
+        store = TestStore(self.root / "remote")
+        write_moomoo_settings(store, ["Initial topic"], 0, defaults)
+        daily.run(self.config, "send", self.environment, self.root / "outputs")
+        before = TestStore(self.root / "remote").load(PATH)
+        write_moomoo_settings(store, ["Future edition topic"], 1, defaults)
+        self.collect.reset_mock()
+        self.generate.reset_mock()
+        self.smtp.reset_mock()
+        with patch("levyquant.daily.read_moomoo_settings") as read_settings:
+            result = daily.run(self.config, "send", {**self.environment, "GITHUB_RUN_ATTEMPT": "2"}, self.root / "outputs")
+        read_settings.assert_not_called()
+        self.collect.assert_not_called()
+        self.generate.assert_not_called()
+        self.smtp.assert_not_called()
+        self.assertEqual(result["accepted"], len(RECIPIENTS))
+        after = TestStore(self.root / "remote").load(PATH)
+        self.assertEqual(after["moomoo_settings_revision"], 1)
+        self.assertEqual(after["html"], before["html"])
+        self.assertEqual(after["content_sha256"], before["content_sha256"])
 
     def test_context_budget_counts_source_text_once_and_retains_all_sources_fairly(self):
         records = [{**ARTICLE, "id": str(index), "source_text": 'quoted "content" \\ ' * 300} for index in range(4)]

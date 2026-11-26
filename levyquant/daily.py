@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 from html import escape
 import hashlib
@@ -17,6 +18,9 @@ from .feeds import DIAGNOSTIC_STATUSES, collect_sources
 from .render import render_digest
 from .smtp_delivery import DeliveryError, DeliveryUncertain, prepare_message, send_one
 from .sources import enrich_articles
+from .source_settings import (
+    MOOMOO_SOURCE_ID, default_moomoo_queries, read_moomoo_settings, validate_moomoo_snapshot,
+)
 from .state_store import GitHubStateStore, LocalStateStore, StateError
 from .state_store import StateConflict
 from .subscriptions import SubscriptionService, validate_public_base_url
@@ -320,7 +324,7 @@ def publish_latest(store, edition: dict) -> None:
                 raise
 
 
-def run(config: dict, mode: str, environment: dict, output: Path) -> dict:
+def run(config: dict, mode: str, environment: dict, output: Path, *, moomoo_settings=None) -> dict:
     config = dict(config)
     config["sender"] = environment.get("SMTP_USERNAME") or config.get("sender")
     recipients = preflight(config, mode, environment)
@@ -358,7 +362,33 @@ def run(config: dict, mode: str, environment: dict, output: Path) -> dict:
             raise ConfigurationError("Stored edition mode does not match this run")
     history = store.load("history.json") or {"events": []}
     if edition is None:
-        sources = read_json(ROOT / config["source_manifest"])["sources"]
+        sources = deepcopy(read_json(ROOT / config["source_manifest"])["sources"])
+        snapshot = validate_moomoo_snapshot(moomoo_settings) if moomoo_settings is not None else None
+        settings_revision = 0
+        if any(source.get("id") == MOOMOO_SOURCE_ID for source in sources):
+            defaults = default_moomoo_queries(sources)
+            if mode == "send":
+                settings = read_moomoo_settings(store, defaults)
+            elif snapshot is not None:
+                settings = snapshot
+            else:
+                remote_fields = ("GITHUB_REPOSITORY", "GITHUB_TOKEN", "STATE_ENCRYPTION_KEY")
+                configured = [bool(environment.get(key)) for key in remote_fields]
+                if any(configured) and not all(configured):
+                    raise ConfigurationError("Shared Moomoo settings require complete remote state configuration")
+                if all(configured):
+                    settings_store = GitHubStateStore(environment["GITHUB_REPOSITORY"], environment["GITHUB_TOKEN"],
+                                                     encryption_key=environment["STATE_ENCRYPTION_KEY"])
+                    settings_store.ensure_state_branch()
+                    settings = read_moomoo_settings(settings_store, defaults)
+                else:
+                    settings = {"queries": defaults, "revision": 0}
+            settings_revision = settings["revision"]
+            for source in sources:
+                if source.get("id") == MOOMOO_SOURCE_ID:
+                    source["queries"] = list(settings["queries"])
+        elif snapshot is not None:
+            raise ConfigurationError("The fixed Moomoo source is not configured")
         reports = []
         articles, warnings = collect_sources(sources, since=now - timedelta(hours=config["lookback_hours"]),
                                             until=now, timeout=config["fetch_timeout_seconds"],
@@ -412,7 +442,8 @@ def run(config: dict, mode: str, environment: dict, output: Path) -> dict:
                    "mode": "live" if mode == "send" else "preview", "validated": True,
                    "subject": "LevyQuant Daily News Digest — Morning Edition, " + date,
                    "html": html, "text": text, "events": events, "deliveries": {},
-                   "created_at": now.isoformat(), "source_count": successful_sources,
+                   "created_at": now.isoformat(), "moomoo_settings_revision": settings_revision,
+                   "source_count": successful_sources,
                    "configured_source_count": len(sources), "enabled_source_count": len(enabled_reports),
                    "source_diagnostics": reports, "article_count": len(public),
                    "section_count": len(digest.get("sections", [])),
@@ -423,7 +454,8 @@ def run(config: dict, mode: str, environment: dict, output: Path) -> dict:
     (output / "email-preview.txt").write_text(edition["text"], encoding="utf-8")
     if mode == "preview":
         return {"mode": mode, "status": "preview_ready_no_mail_sent", "date": date,
-                "article_count": edition["article_count"], "section_count": edition["section_count"]}
+                "article_count": edition["article_count"], "section_count": edition["section_count"],
+                "moomoo_settings_revision": edition.get("moomoo_settings_revision", 0)}
     if mode == "preview-email":
         sender = config["sender"]
         message = prepare_message("[PREVIEW] " + edition["subject"], edition["html"], edition["text"],

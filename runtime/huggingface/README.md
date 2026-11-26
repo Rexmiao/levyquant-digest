@@ -87,6 +87,12 @@ The owner opens **`/admin`** and supplies `SPACE_ADMIN_TOKEN`. Every protected m
 
 After configuration, the owner generates a real preview from the live sources, lets the existing schema and evidence checks validate it, then publishes the approved preview. Before a preview is published, the landing page must clearly indicate that a current real preview is unavailable; demo copy is not a live news edition. Do not bypass evidence failures by changing model providers or publishing an unchecked draft.
 
+### Shared Moomoo keywords
+
+After deploying the source-settings feature, edit and save Moomoo search keywords in `/admin`. They are stored at `settings/moomoo.json` on the existing `delivery-state` branch, encrypted with the existing `STATE_ENCRYPTION_KEY`. GitHub daily delivery and newly generated HF previews read the same saved configuration. `config/friend-sources.json` supplies initial defaults only when no saved settings exist; the Space's temporary disk and browser storage are not the durable settings store.
+
+Saving keywords does not generate a preview or send email. A formal edition already frozen for the current New York date retains its original body and delivery records; changed keywords apply to new collection and previews, without rewriting or resending an already sent edition. Moomoo remains headline-and-link coverage, without inferred article detail. The feature uses the existing GitHub token and encrypted state: no additional secret, repository permission, paid hardware or GPU is required. Keep the Space on CPU Basic.
+
 ## Validate before calling it live
 
 1. Confirm the Docker build succeeds and the public landing page loads at the actual HF URL. With credentials absent, protected operations must remain locked.

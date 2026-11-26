@@ -19,6 +19,27 @@
       <p id="admin-status" class="notice" role="status" aria-live="polite"></p>
       <div class="admin-actions"><button id="generate-button" class="button primary" type="button" data-i18n="adminGenerate">Generate private preview</button><button id="publish-button" class="button secondary" type="button" data-i18n="adminPublish" disabled>Publish to public page</button><button id="send-button" class="button secondary" type="button" data-i18n="adminSend">Send this edition</button><button id="refresh-button" class="button secondary" type="button" data-i18n="adminRefresh">Refresh status</button></div>
       <p id="action-status" class="form-status" role="status" aria-live="polite"></p>
+      <section id="moomoo-settings-panel" class="edition-card source-settings" aria-labelledby="moomoo-settings-title">
+        <div class="source-settings-layout">
+          <div>
+            <p class="eyebrow" data-i18n="moomooSourcesEyebrow">NEWS SOURCES</p>
+            <h2 id="moomoo-settings-title" data-i18n="moomooSettingsTitle">Moomoo search keywords</h2>
+            <p class="muted" data-i18n="moomooSettingsCopy">Choose the companies or topics to look for in Moomoo's public news search.</p>
+            <p class="small muted" data-i18n="moomooApplyNotice">Saved keywords apply to the next website preview and new daily editions. Editions already sent stay unchanged. Saving does not send email.</p>
+          </div>
+          <form id="moomoo-settings-form" novalidate>
+            <label for="moomoo-queries" data-i18n="moomooQueriesLabel">Search keywords</label>
+            <textarea id="moomoo-queries" rows="4" spellcheck="false" autocapitalize="off" autocomplete="off" placeholder="Federal Reserve&#10;Apple&#10;NVIDIA" data-i18n-placeholder="moomooQueriesPlaceholder" aria-describedby="moomoo-queries-help moomoo-settings-status" disabled></textarea>
+            <p id="moomoo-queries-help" class="small muted source-settings-help" data-i18n="moomooQueriesHelp">One keyword or phrase per line. Use 1–4 lines, up to 200 characters each.</p>
+            <div class="source-settings-actions">
+              <button id="moomoo-save-button" class="button primary" type="submit" disabled data-i18n="moomooSave">Save keywords</button>
+              <button id="moomoo-refresh-button" class="button secondary" type="button" disabled data-i18n="moomooReload">Reload saved keywords</button>
+            </div>
+            <p id="moomoo-settings-status" class="form-status source-settings-status" role="status" aria-live="polite"></p>
+            <p class="small muted source-settings-help" data-i18n="moomooReloadNotice">Reloading replaces unsaved edits with the saved keywords.</p>
+          </form>
+        </div>
+      </section>
       <div class="admin-grid">
         <section class="edition-card"><div class="section-top"><p class="eyebrow" data-i18n="adminSubscribersEyebrow">SUBSCRIBERS</p><span id="subscriber-count" class="quiet"></span></div><h2 data-i18n="adminSubscribersTitle">Subscriber list</h2><p class="small muted" data-i18n="adminSubscribersCopy">Public subscribers must confirm their email. Fixed internal recipients remain in a separate GitHub list.</p><div class="table-scroll"><table><thead><tr><th data-i18n="adminEmailColumn">Email</th><th data-i18n="adminStatusColumn">Status</th><th data-i18n="adminActionColumn">Manage</th></tr></thead><tbody id="subscribers-body"></tbody></table></div></section>
         <section class="edition-card"><p class="eyebrow" data-i18n="adminActivityEyebrow">DELIVERY ACTIVITY</p><h2 data-i18n="adminActivityTitle">Delivery runs</h2><p class="small muted" data-i18n="adminActivityCopy">A queued or successful run does not prove inbox arrival. Check delivery results and actual receipt.</p><div id="runs-list" class="runs-list"></div></section>

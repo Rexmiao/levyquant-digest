@@ -20,6 +20,9 @@ from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 from . import daily
 from .editor import EDITOR_ERROR_CODES, EditorError, EditorValidationError
+from .source_settings import (SourceSettingsError, default_moomoo_queries,
+                              read_moomoo_settings, validate_moomoo_snapshot,
+                              write_moomoo_settings)
 from .state_store import GitHubStateStore, LocalStateStore, StateConflict, StateError
 from .subscriptions import SubscriptionError, validate_email, validate_public_base_url
 
@@ -195,6 +198,17 @@ class SpaceApplication:
         from .subscriptions import service_from_env
         return service_from_env(environment)
 
+    def _moomoo_defaults(self) -> list[str]:
+        config = daily.read_json(ROOT / "config/cloud.json")
+        sources = daily.read_json(ROOT / config["source_manifest"])
+        try:
+            return default_moomoo_queries(sources.get("sources"))
+        except SourceSettingsError:
+            raise AppError(503, "source_settings_unavailable") from None
+
+    def _moomoo_settings(self) -> dict:
+        return read_moomoo_settings(self._new_store(), self._moomoo_defaults())
+
     def signup_enabled(self) -> bool:
         try:
             validate_public_base_url(self.environment.get("DIGEST_PUBLIC_BASE_URL", ""))
@@ -295,10 +309,12 @@ class SpaceApplication:
             environment = {key: self.environment[key] for key in ("GEMINI_API_KEY", "GEMINI_FREE_TIER_CONFIRMED")
                            if key in self.environment}
             config = daily.read_json(ROOT / "config/cloud.json")
+            stage = "source_settings_read"
+            settings = self._moomoo_settings()
             with tempfile.TemporaryDirectory(prefix="levyquant-preview-") as directory:
                 output = Path(directory)
                 stage = "preview_pipeline"
-                result = self._preview_runner(config, "preview", environment, output)
+                result = self._preview_runner(config, "preview", environment, output, moomoo_settings=settings)
                 stage = "edition_validation"
                 if (not isinstance(result, dict) or result.get("mode") != "preview"
                         or result.get("status") != "preview_ready_no_mail_sent"
@@ -311,7 +327,8 @@ class SpaceApplication:
                 preview = _preview_fields(edition)
             with self._preview_lock:
                 self._generated_preview = deepcopy(preview)
-                self._preview_state = {"status": "ready", "preview": preview}
+                self._preview_state = {"status": "ready", "preview": preview,
+                                       "moomoo_settings_revision": settings["revision"]}
         except Exception as error:
             with self._preview_lock:
                 self._generated_preview = None
@@ -406,6 +423,20 @@ class SpaceApplication:
             return 200, self._new_subscription_service().admin_suppress(identifier)
         if method == "GET" and path == "/api/admin/status":
             return 200, self._admin_status()
+        if method == "GET" and path == "/api/admin/moomoo-settings":
+            return 200, self._moomoo_settings()
+        if method == "POST" and path == "/api/admin/moomoo-settings":
+            _body_fields(body, {"queries", "revision"})
+            try:
+                snapshot = validate_moomoo_snapshot(body)
+            except SourceSettingsError:
+                raise AppError(400, "invalid_moomoo_settings") from None
+            try:
+                saved = write_moomoo_settings(self._new_store(), snapshot["queries"],
+                                               snapshot["revision"], self._moomoo_defaults())
+            except StateConflict:
+                raise AppError(409, "moomoo_settings_conflict") from None
+            return 200, saved
         if method == "POST" and path == "/api/admin/send":
             _body_fields(body, set())
             self._new_store()  # Verify the encryption marker before dispatching.
