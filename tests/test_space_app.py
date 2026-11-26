@@ -324,6 +324,7 @@ class AppTests(unittest.TestCase):
             {"id": 44, "status": "completed", "conclusion": "failure", "display_title": "LevyQuant Daily Digest [send]",
              "html_url": "https://github.com/Rexmiao/levyquant-digest/actions/runs/44"},
             {"id": 45, "status": "completed", "conclusion": "success", "html_url": "https://untrusted.example"}]}
+        self.store.values["runs/43.json"] = {"date": PREVIEW["date"], "created_at": "2026-11-26T12:00:00+00:00"}
         class ReportClock(datetime):
             @classmethod
             def now(cls, tz=None):
@@ -341,8 +342,10 @@ class AppTests(unittest.TestCase):
         self.assertEqual(set(runs), {42, 43, 44})
         self.assertEqual(runs[42]["mode"], "preview")
         self.assertIsNone(runs[42]["counts"])
-        self.assertIsNone(runs[43]["mode"])
+        self.assertEqual(runs[43]["mode"], "send")
+        self.assertEqual(runs[43]["date"], PREVIEW["date"])
         self.assertIsNone(runs[43]["result_status"])
+        self.assertIsNone(runs[43]["counts"])
         self.assertEqual(runs[44]["mode"], "send")
         self.assertIsNone(runs[44]["counts"])
         self.assertNotIn("hash-a", json.dumps(report))

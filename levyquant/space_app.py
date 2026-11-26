@@ -370,6 +370,21 @@ class SpaceApplication:
                     mode = re.fullmatch(r"LevyQuant Daily Digest \[(send|preview|preview-email|smtp-test)\]", title) if isinstance(title, str) else None
                     if mode:
                         row["mode"] = mode.group(1)
+                if row["mode"] is None or row["date"] is None:
+                    # Older live runs saved a date claim before generation.
+                    # That proves the run mode, never SMTP success or counts.
+                    claim = store.load("runs/" + str(identifier) + ".json")
+                    if isinstance(claim, dict) and set(claim) == {"date", "created_at"}:
+                        try:
+                            claimed_day = date.fromisoformat(claim["date"])
+                            claimed_at = datetime.fromisoformat(claim["created_at"])
+                            if (claimed_day.isoformat() != claim["date"] or claimed_at.utcoffset() is None
+                                    or row["mode"] not in (None, "send")):
+                                raise ValueError
+                        except (ValueError, TypeError, OverflowError):
+                            continue
+                        row["mode"] = "send"
+                        row["date"] = claimed_day.isoformat()
         except Exception:
             runs_unavailable = True
         return {"editions": editions, "runs": [runs[key] for key in sorted(runs, reverse=True)[:50]],
