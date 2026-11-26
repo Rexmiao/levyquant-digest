@@ -13,6 +13,7 @@ import json
 import os
 from pathlib import Path
 import re
+import time
 import unicodedata
 from urllib import error, request
 
@@ -533,7 +534,7 @@ def _request_model(payload: dict, api_key: str, model: str, timeout: float) -> s
     except error.HTTPError as exc:
         status = int(exc.code)
         exc.close()
-        raise EditorError(f"Gemini request failed (HTTP {status}); no fallback or HTTP retry was attempted.",
+        raise EditorError(f"Gemini request failed (HTTP {status}); no fallback was used.",
                           error_code="model_http_error", http_status=status) from None
     except (error.URLError, TimeoutError, OSError):
         raise EditorError("Gemini network request failed; no fallback or HTTP retry was attempted.", error_code="model_network_error") from None
@@ -568,9 +569,10 @@ def generate_editor(articles: list[dict], *, api_key: str | None = None,
 
     ``api_key`` is an injection point for callers that already read
     ``GEMINI_API_KEY``. It is never read from files or sent in the endpoint URL.
-    HTTP/quota/network failures stop immediately. There is no paid fallback.
-    After the single repair, reliably identified invalid content items may be
-    omitted whole. Every survivor is revalidated; no evidence rule is relaxed.
+    The first HTTP 500/502/503/504 can use the remaining request after a two-second
+    delay. All other transport failures stop immediately. There is no paid fallback.
+    Once this shared budget is exhausted, reliably identified invalid content
+    items may be omitted whole. Every survivor is revalidated; no evidence rule is relaxed.
     """
     key = api_key if api_key is not None else os.environ.get("GEMINI_API_KEY", "")
     if not isinstance(key, str) or not key.strip() or any(char.isspace() for char in key):
@@ -598,7 +600,14 @@ def generate_editor(articles: list[dict], *, api_key: str | None = None,
                              "maxOutputTokens": max_output_tokens, "candidateCount": 1},
     }
     for attempt in range(2):
-        output = _request_model(payload, key, model, timeout)
+        try:
+            output = _request_model(payload, key, model, timeout)
+        except EditorError as exc:
+            if (attempt == 0 and exc.error_code == "model_http_error"
+                    and exc.http_status in (500, 502, 503, 504)):
+                time.sleep(2)
+                continue
+            raise
         report = validate_editor(output, articles)
         if report["valid"]:
             return GeneratedEditor(report["editor_output"], requests=attempt + 1)

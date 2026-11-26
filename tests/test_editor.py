@@ -156,18 +156,84 @@ class EditorTests(unittest.TestCase):
                 generate_editor(self.articles, api_key=self.key, prompt="Digest")
         self.assertEqual(opened.call_count, 2)
 
-    def test_http_quota_errors_never_leak_body_or_trigger_fallback(self):
-        api_error = HTTPError("https://generativelanguage.googleapis.com/", 429,
-                              "reason " + self.key, None, BytesIO(("provider-body " + self.key).encode()))
-        with patch("levyquant.editor._OPEN", side_effect=api_error) as opened:
-            with self.assertRaises(EditorError) as captured:
-                generate_editor(self.articles, api_key=self.key, prompt="Digest")
-        self.assertEqual(opened.call_count, 1)
-        self.assertIn("HTTP 429", str(captured.exception))
-        self.assertEqual(captured.exception.error_code, "model_http_error")
-        self.assertEqual(captured.exception.http_status, 429)
-        self.assertNotIn(self.key, str(captured.exception))
-        self.assertNotIn("provider-body", str(captured.exception))
+    def http_error(self, status):
+        return HTTPError("https://generativelanguage.googleapis.com/", status,
+                         "reason " + self.key, None, BytesIO(("provider-body " + self.key).encode()))
+
+    def test_http_client_errors_never_leak_body_retry_or_trigger_fallback(self):
+        for status in (400, 401, 403, 429):
+            with self.subTest(status=status):
+                with patch("levyquant.editor._OPEN", side_effect=self.http_error(status)) as opened, \
+                        patch("levyquant.editor.time.sleep") as sleep:
+                    with self.assertRaises(EditorError) as captured:
+                        generate_editor(self.articles, api_key=self.key, prompt="Digest")
+                self.assertEqual(opened.call_count, 1)
+                sleep.assert_not_called()
+                self.assertIn("HTTP " + str(status), str(captured.exception))
+                self.assertEqual(captured.exception.error_code, "model_http_error")
+                self.assertEqual(captured.exception.http_status, status)
+                self.assertNotIn(self.key, str(captured.exception))
+                self.assertNotIn("provider-body", str(captured.exception))
+
+    def test_transient_http_retry_uses_same_request_and_shared_budget(self):
+        for status in (500, 502, 503, 504):
+            with self.subTest(status=status):
+                with patch("levyquant.editor._OPEN", side_effect=[self.http_error(status), self.response()]) as opened, \
+                        patch("levyquant.editor.time.sleep") as sleep:
+                    result = generate_editor(self.articles, api_key=self.key, prompt="Digest")
+                self.assertEqual(result, self.editor)
+                self.assertEqual(result.generation_metadata["requests"], 2)
+                self.assertEqual(opened.call_count, 2)
+                sleep.assert_called_once_with(2)
+                first, second = (call.args[0] for call in opened.call_args_list)
+                self.assertEqual(first.full_url, second.full_url)
+                self.assertEqual(first.data, second.data)
+                self.assertEqual(first.header_items(), second.header_items())
+                self.assertEqual(len(json.loads(second.data)["contents"]), 1)
+
+    def test_second_http_failure_exhausts_retry_or_repair_budget(self):
+        for first_failure in ("transient", "validation"):
+            with self.subTest(first_failure=first_failure):
+                first = self.http_error(503) if first_failure == "transient" else self.response(raw_editor="invalid JSON")
+                with patch("levyquant.editor._OPEN", side_effect=[first, self.http_error(502)]) as opened, \
+                        patch("levyquant.editor.time.sleep") as sleep:
+                    with self.assertRaises(EditorError) as captured:
+                        generate_editor(self.articles, api_key=self.key, prompt="Digest")
+                self.assertEqual(opened.call_count, 2)
+                self.assertEqual(captured.exception.error_code, "model_http_error")
+                self.assertEqual(captured.exception.http_status, 502)
+                self.assertNotIn(self.key, str(captured.exception))
+                if first_failure == "transient":
+                    sleep.assert_called_once_with(2)
+                else:
+                    sleep.assert_not_called()
+
+    def test_output_after_transient_retry_uses_existing_survivor_rules_without_third_request(self):
+        for defect in ("mixed_items", "all_items_invalid", "schema", "unknown_source"):
+            with self.subTest(defect=defect):
+                output = deepcopy(self.editor)
+                bad = deepcopy(output["sections"][0]["items"][0])
+                bad.update(title="Unsupported sample size", summary="Researchers used 999 observations.")
+                output["sections"][0]["items"].append(bad)
+                if defect == "all_items_invalid":
+                    output["sections"][0]["items"] = [bad]
+                elif defect == "schema":
+                    output["unexpected"] = "not allowed"
+                elif defect == "unknown_source":
+                    bad["source_ids"] = ["unknown"]
+                with patch("levyquant.editor._OPEN", side_effect=[self.http_error(503), self.response(output)]) as opened, \
+                        patch("levyquant.editor.time.sleep") as sleep:
+                    if defect == "mixed_items":
+                        result = generate_editor(self.articles, api_key=self.key, prompt="Digest")
+                        self.assertEqual(result, self.editor)
+                        self.assertTrue(validate_editor(result, self.articles)["valid"])
+                        self.assertEqual(result.generation_metadata["requests"], 2)
+                        self.assertEqual(result.generation_metadata["discarded_items"], 1)
+                    else:
+                        with self.assertRaises(EditorValidationError):
+                            generate_editor(self.articles, api_key=self.key, prompt="Digest")
+                self.assertEqual(opened.call_count, 2)
+                sleep.assert_called_once_with(2)
 
     def test_after_one_repair_omit_only_bad_items_and_keep_every_valid_item(self):
         articles, good_items = [], []
@@ -267,13 +333,17 @@ class EditorTests(unittest.TestCase):
                 self.assertEqual(opened.call_count, 2)
 
     def test_network_error_and_truncated_generation_stop_without_repair(self):
-        with patch("levyquant.editor._OPEN", side_effect=URLError(self.key)) as opened:
-            with self.assertRaises(EditorError) as captured:
-                generate_editor(self.articles, api_key=self.key, prompt="Digest")
-        self.assertNotIn(self.key, str(captured.exception))
-        self.assertEqual(captured.exception.error_code, "model_network_error")
-        self.assertIsNone(captured.exception.http_status)
-        self.assertEqual(opened.call_count, 1)
+        for failure in (URLError(self.key), TimeoutError(self.key)):
+            with self.subTest(failure=type(failure).__name__):
+                with patch("levyquant.editor._OPEN", side_effect=failure) as opened, \
+                        patch("levyquant.editor.time.sleep") as sleep:
+                    with self.assertRaises(EditorError) as captured:
+                        generate_editor(self.articles, api_key=self.key, prompt="Digest")
+                self.assertNotIn(self.key, str(captured.exception))
+                self.assertEqual(captured.exception.error_code, "model_network_error")
+                self.assertIsNone(captured.exception.http_status)
+                self.assertEqual(opened.call_count, 1)
+                sleep.assert_not_called()
         with patch("levyquant.editor._OPEN", return_value=self.response(finish="MAX_TOKENS")) as opened:
             with self.assertRaises(EditorError) as captured:
                 generate_editor(self.articles, api_key=self.key, prompt="Digest")
