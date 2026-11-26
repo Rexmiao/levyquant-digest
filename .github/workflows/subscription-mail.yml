@@ -1,4 +1,4 @@
-name: LevyQuant Subscription Confirmations
+name: LevyQuant Subscription and Administrator Mail
 
 "on":
   workflow_dispatch: {}
@@ -18,12 +18,11 @@ defaults:
 
 jobs:
   confirmations:
-    name: Deliver queued subscription confirmations
+    name: Deliver queued subscription confirmations and administrator codes
     if: >-
       ${{ github.repository == 'Rexmiao/levyquant-digest' &&
           github.repository_owner == 'Rexmiao' &&
           github.event.repository.fork == false &&
-          vars.SUBSCRIPTIONS_ENABLED == 'true' &&
           ((github.event_name == 'workflow_dispatch' && github.actor == 'Rexmiao') ||
            github.event_name == 'schedule') }}
     runs-on: ubuntu-24.04
@@ -34,6 +33,8 @@ jobs:
       PYTHONUTF8: '1'
       PYTHONDONTWRITEBYTECODE: '1'
       SUBSCRIPTIONS_ENABLED: ${{ vars.SUBSCRIPTIONS_ENABLED }}
+      # This switch controls subscription confirmations only. Allowlisted
+      # administrator sign-in codes use the same reserved mail worker independently.
       DIGEST_PUBLIC_BASE_URL: ${{ vars.DIGEST_PUBLIC_BASE_URL }}
     steps:
       - name: Validate personal repository scope
@@ -64,7 +65,7 @@ jobs:
         run: python -m pip install --disable-pip-version-check -r requirements-cloud.txt
       - name: Run offline tests
         run: python -m unittest discover -s tests -v
-      - name: Deliver reserved confirmation messages
+      - name: Deliver reserved subscription links and administrator codes
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           STATE_ENCRYPTION_KEY: ${{ secrets.STATE_ENCRYPTION_KEY }}

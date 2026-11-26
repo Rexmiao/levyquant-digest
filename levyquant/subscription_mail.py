@@ -1,7 +1,9 @@
-"""Send queued confirmation links from GitHub; never log their private data."""
+"""Send reserved subscription links and admin codes; never log private data."""
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from html import escape
+from hashlib import sha256
 import json
 import os
 import re
@@ -9,6 +11,87 @@ from urllib.parse import parse_qs, urlsplit
 
 from .smtp_delivery import DeliveryError, DeliveryUncertain, prepare_message, send_one
 from .subscriptions import REPOSITORY, SubscriptionError, service_from_env, validate_email
+
+
+_IDENTIFIER = re.compile(r"[A-Za-z0-9_-]{1,128}\Z")
+_SMTP_STAGES = frozenset({"validation", "connect", "greeting", "auth", "mail", "sender", "recipient", "data"})
+ADMIN_SUBJECT = "Your LevyQuant administrator sign-in code"
+
+
+def admin_service_from_env(environment):
+    # Keep existing injected subscription-only callers isolated from remote
+    # administrator state. Production callers without injections use both.
+    from .admin_auth import service_from_env as factory
+    return factory(environment)
+
+
+def _submit(transport, message, sender, password):
+    try:
+        receipt = transport(message, username=sender, password=password)
+    except DeliveryUncertain as error:
+        status, stage, code = "uncertain", error.stage, error.smtp_code
+    except DeliveryError as error:
+        status, stage, code = "rejected", error.stage, error.smtp_code
+    else:
+        status = "accepted" if isinstance(receipt, dict) and receipt.get("status") == "accepted" else "uncertain"
+        stage = None
+        code = receipt.get("smtp_code") if isinstance(receipt, dict) else None
+    return (status, stage if isinstance(stage, str) and stage in _SMTP_STAGES else None,
+            code if type(code) is int and 100 <= code <= 599 else None)
+
+
+def _login_claim(value, identifier):
+    if (not isinstance(value, dict)
+            or set(value) != {"id", "email", "code", "expires_at", "reservation_id"}
+            or value.get("id") != identifier
+            or not isinstance(value.get("reservation_id"), str)
+            or not _IDENTIFIER.fullmatch(value["reservation_id"])
+            or not isinstance(value.get("code"), str)
+            or not re.fullmatch(r"[0-9]{6}", value["code"])
+            or not isinstance(value.get("expires_at"), str)
+            or len(value["expires_at"]) > 64):
+        raise SubscriptionError("Invalid reserved administrator message")
+    recipient = validate_email(value["email"])
+    try:
+        expires = datetime.fromisoformat(value["expires_at"].replace("Z", "+00:00"))
+        if expires.tzinfo is None or expires.utcoffset() is None:
+            raise ValueError
+        expires = expires.astimezone(timezone.utc)
+    except (ValueError, TypeError, OverflowError):
+        raise SubscriptionError("Invalid administrator message expiry") from None
+    return recipient, expires
+
+
+def _send_admin_codes(service, transport, sender, password, counts):
+    pending = service.pending_login_messages(limit=10)
+    if (not isinstance(pending, list) or len(pending) > 10
+            or any(not isinstance(row, dict) or set(row) != {"id"}
+                   or not isinstance(row.get("id"), str) or not _IDENTIFIER.fullmatch(row["id"])
+                   for row in pending)):
+        raise SubscriptionError("Invalid bounded administrator queue")
+    for row in pending:
+        claimed = service.claim_login_message(row["id"])
+        if claimed is None:
+            counts["skipped"] += 1
+            continue
+        # The service must persist and reread its reservation before returning
+        # a recipient/code. A crash or an unknown outcome stays non-replayable.
+        recipient, expires = _login_claim(claimed, row["id"])
+        if datetime.now(timezone.utc) >= expires:
+            counts["skipped"] += 1
+            continue
+        text = ("Your LevyQuant administrator sign-in code is:\n\n" + claimed["code"]
+                + "\n\nThis code expires 10 minutes after it was requested. "
+                "Do not forward or share this code. If you did not request it, ignore this message.\n")
+        html = ("<p>Your LevyQuant administrator sign-in code is:</p><p><strong>"
+                + claimed["code"] + "</strong></p><p>This code expires 10 minutes after it was requested. "
+                "Do not forward or share this code. If you did not request it, ignore this message.</p>")
+        identity = sha256((claimed["id"] + "\0" + claimed["reservation_id"]).encode("ascii")).hexdigest()
+        message = prepare_message(ADMIN_SUBJECT, html, text, sender, recipient, "admin-login-" + identity)
+        status, stage, code = _submit(transport, message, sender, password)
+        service.mark_login_message(claimed["id"], status, reservation_id=claimed["reservation_id"],
+                                   stage=stage, smtp_code=code)
+        counts[status] += 1
 
 
 def _confirmation_url(value: str, service, identifier: str) -> str:
@@ -29,20 +112,31 @@ def _confirmation_url(value: str, service, identifier: str) -> str:
     return value
 
 
-def run(environment: dict | None = None, *, service=None, transport=None) -> dict:
+def run(environment: dict | None = None, *, service=None, transport=None, admin_service=None) -> dict:
     environment = dict(os.environ if environment is None else environment)
-    if environment.get("SUBSCRIPTIONS_ENABLED", "").lower() != "true":
+    subscriptions_enabled = environment.get("SUBSCRIPTIONS_ENABLED", "").lower() == "true"
+    production = service is None and admin_service is None
+    remote_configured = all(environment.get(name) for name in (
+        "GITHUB_REPOSITORY", "GITHUB_TOKEN", "STATE_ENCRYPTION_KEY", "SMTP_USERNAME", "SMTP_APP_PASSWORD"))
+    if (not subscriptions_enabled and admin_service is None
+            and (not production or not remote_configured)):
         return {"status": "disabled", "accepted": 0, "rejected": 0, "uncertain": 0, "skipped": 0}
     if environment.get("GITHUB_REPOSITORY") != REPOSITORY:
-        raise SubscriptionError("Confirmation delivery is restricted to the intended repository")
+        raise SubscriptionError("Queued delivery is restricted to the intended repository")
     sender = validate_email(environment.get("SMTP_USERNAME", ""))
     password = environment.get("SMTP_APP_PASSWORD")
     if not isinstance(password, str) or not password.strip():
-        raise SubscriptionError("SMTP_APP_PASSWORD is required for confirmation delivery")
-    service = service if service is not None else service_from_env(environment)
+        raise SubscriptionError("SMTP_APP_PASSWORD is required for queued delivery")
+    if subscriptions_enabled and service is None and production:
+        service = service_from_env(environment)
+    if admin_service is None and production:
+        admin_service = admin_service_from_env(environment)
     transport = transport or send_one
     counts = {"accepted": 0, "rejected": 0, "uncertain": 0, "skipped": 0}
-    pending = service.pending_confirmations(limit=20)
+    # Ten-minute codes should not wait behind a batch of 48-hour confirmations.
+    if admin_service is not None:
+        _send_admin_codes(admin_service, transport, sender, password, counts)
+    pending = service.pending_confirmations(limit=20) if subscriptions_enabled and service is not None else []
     if not isinstance(pending, list) or len(pending) > 20:
         raise SubscriptionError("Invalid bounded confirmation queue")
     for row in pending:
@@ -65,16 +159,7 @@ def run(environment: dict | None = None, *, service=None, transport=None) -> dic
                 "The link expires after 48 hours. If you did not request this, ignore this message.\n")
         message = prepare_message("Confirm your LevyQuant subscription", html, text, sender, recipient,
                                   "subscription-confirm-" + claimed["id"] + "-" + claimed["reservation_id"])
-        try:
-            receipt = transport(message, username=sender, password=password)
-        except DeliveryUncertain as error:
-            status, stage, code = "uncertain", error.stage, error.smtp_code
-        except DeliveryError as error:
-            status, stage, code = "rejected", error.stage, error.smtp_code
-        else:
-            status = "accepted" if isinstance(receipt, dict) and receipt.get("status") == "accepted" else "uncertain"
-            stage = None
-            code = receipt.get("smtp_code") if isinstance(receipt, dict) else None
+        status, stage, code = _submit(transport, message, sender, password)
         service.mark_confirmation(claimed["id"], status, reservation_id=claimed["reservation_id"], stage=stage, smtp_code=code)
         counts[status] += 1
     return {"status": "needs_attention" if counts["rejected"] or counts["uncertain"] else "completed", **counts}

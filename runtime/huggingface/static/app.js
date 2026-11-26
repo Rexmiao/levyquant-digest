@@ -298,6 +298,40 @@
     moomooUnavailable: '无法加载关键词或核验保存结果。草稿已保留，请重新加载已保存关键词或刷新状态后再保存。',
     moomooInvalid: '请输入 1–4 行非空关键词，每行最多 200 个字符，且不含控制字符。'
   });
+  Object.assign(TEXT.en, {
+    adminEmailLoginCopy: 'Sign in with an email verification code. Refreshing this page requires a new sign-in.',
+    adminLoginEmailLabel: 'Administrator email',
+    adminRequestCode: 'Send verification code',
+    adminRequestingCode: 'Requesting code…',
+    adminLoginCodeLabel: 'Six-digit verification code',
+    adminVerifyCode: 'Verify and sign in',
+    adminVerifyingCode: 'Verifying code…',
+    adminResendCode: 'Resend code',
+    adminResendCountdown: 'Send again in {seconds}s',
+    adminCodeRequested: 'If this email has administrator access, a verification code will be sent. Check your inbox and spam folder. Delivery may take about a minute.',
+    adminEmailLoginUnavailable: 'Email sign-in is temporarily unavailable. Try again later or use a recovery credential.',
+    adminCodeInvalid: 'The code is incorrect or has expired. Try again, or request a new code.',
+    adminSessionExpired: 'Your session has expired. Request a new email code to sign in again.',
+    adminSigningOut: 'Signing out…',
+    adminRecoverySummary: 'Use a recovery credential'
+  });
+  Object.assign(TEXT.zh, {
+    adminEmailLoginCopy: '使用邮箱验证码登录。刷新页面后需要重新验证邮箱。',
+    adminLoginEmailLabel: '管理员邮箱',
+    adminRequestCode: '发送验证码',
+    adminRequestingCode: '正在申请验证码…',
+    adminLoginCodeLabel: '六位数字验证码',
+    adminVerifyCode: '验证并登录',
+    adminVerifyingCode: '正在验证…',
+    adminResendCode: '重新发送验证码',
+    adminResendCountdown: '{seconds} 秒后可重新发送',
+    adminCodeRequested: '如果该邮箱具有管理权限，验证码将发送到邮箱。请留意收件箱及垃圾邮件，送达可能需要约一分钟。',
+    adminEmailLoginUnavailable: '邮箱登录暂时不可用，请稍后重试或使用恢复凭证。',
+    adminCodeInvalid: '验证码不正确或已过期，请重试或重新申请验证码。',
+    adminSessionExpired: '管理会话已过期，请重新获取邮箱验证码登录。',
+    adminSigningOut: '正在退出登录…',
+    adminRecoverySummary: '使用恢复凭证'
+  });
   const STATE_KEYS = {
     pending: 'statePending', confirmed: 'stateConfirmed', seeded: 'stateSeeded',
     suppressed: 'stateSuppressed', unsubscribed: 'stateUnsubscribed',
@@ -310,6 +344,11 @@
   let language = 'en';
   let adminToken = '';
   let adminGeneration = 0;
+  let emailLoginSequence = 0;
+  let emailLoginTimer = null;
+  let emailLogin = emptyEmailLogin();
+  let recoveryLoginBusy = false;
+  let logoutBusy = false;
   let previewTimer = null;
   let moomooLoadSequence = 0;
   let moomooSettings = emptyMoomooSettings();
@@ -353,12 +392,12 @@
     if (status) error.status = status;
     return error;
   }
-  async function api(path, {method = 'GET', body, admin = false} = {}) {
+  async function api(path, {method = 'GET', body, admin = false, signal} = {}) {
     const sessionGeneration = adminGeneration;
     const headers = {'Accept': 'application/json'};
     if (body !== undefined) headers['Content-Type'] = 'application/json';
     if (admin) headers.Authorization = 'Bearer ' + adminToken;
-    const response = await fetch(path, {method, headers, credentials: 'same-origin', cache: 'no-store', ...(body === undefined ? {} : {body: JSON.stringify(body)})});
+    const response = await fetch(path, {method, headers, credentials: 'same-origin', cache: 'no-store', ...(signal ? {signal} : {}), ...(body === undefined ? {} : {body: JSON.stringify(body)})});
     let data;
     try { data = await response.json(); } catch { throw errorFor('msgServiceUnavailable'); }
     if (admin && sessionGeneration !== adminGeneration) {
@@ -367,8 +406,13 @@
       throw stale;
     }
     if (!response.ok) {
-      if (admin && response.status === 401) logout();
-      throw errorFor(response.status === 401 ? 'msgInvalidAdmin' : response.status === 429 ? 'msgRateLimited' :
+      const sessionExpired = admin && response.status === 401 && adminToken.startsWith('lq_session_');
+      if (admin && response.status === 401) {
+        clearAdminSession();
+        message(sessionExpired ? 'admin-email-login-status' : 'login-status',
+          sessionExpired ? 'adminSessionExpired' : 'msgInvalidAdmin', true);
+      }
+      throw errorFor(sessionExpired ? 'adminSessionExpired' : response.status === 401 ? 'msgInvalidAdmin' : response.status === 429 ? 'msgRateLimited' :
         response.status === 503 ? 'msgTemporaryUnavailable' : 'msgOperationFailed', response.status);
     }
     return data;
@@ -411,6 +455,7 @@
       renderSubscribers();
       renderRuns();
       renderMoomooSettings();
+      renderEmailLogin();
     } else {
       renderPublicState();
       renderFlow();
@@ -505,9 +550,158 @@
       }
     });
   }
-  function logout() {
+  function emptyEmailLogin() {
+    return {email: '', code: '', challengeId: null, requestBusy: false, verifyBusy: false, cooldownUntil: 0};
+  }
+  function resetEmailLogin() {
+    emailLoginSequence += 1;
+    if (emailLoginTimer) clearTimeout(emailLoginTimer);
+    emailLoginTimer = null;
+    emailLogin.email = ''; emailLogin.code = ''; emailLogin.challengeId = null;
+    emailLogin = emptyEmailLogin();
+    message('admin-email-login-status', '');
+    renderEmailLogin();
+  }
+  function renderEmailLogin() {
+    if (!$('admin-email-login-form')) return;
+    const busy = emailLogin.requestBusy || emailLogin.verifyBusy || recoveryLoginBusy || logoutBusy;
+    const seconds = Math.max(0, Math.ceil((emailLogin.cooldownUntil - Date.now()) / 1000));
+    const email = $('admin-login-email');
+    const code = $('admin-login-code');
+    if (email.value !== emailLogin.email) email.value = emailLogin.email;
+    if (code.value !== emailLogin.code) code.value = emailLogin.code;
+    email.disabled = busy;
+    code.disabled = busy;
+    $('admin-code-login-form').hidden = !emailLogin.challengeId;
+    $('admin-email-login-form').setAttribute('aria-busy', String(emailLogin.requestBusy));
+    $('admin-code-login-form').setAttribute('aria-busy', String(emailLogin.verifyBusy));
+    $('admin-request-code-button').disabled = busy || seconds > 0;
+    $('admin-request-code-button').textContent = t(emailLogin.requestBusy ? 'adminRequestingCode' :
+      seconds > 0 ? 'adminResendCountdown' : 'adminRequestCode', {seconds});
+    $('admin-resend-code-button').disabled = busy || seconds > 0;
+    $('admin-resend-code-button').textContent = t(seconds > 0 ? 'adminResendCountdown' : 'adminResendCode', {seconds});
+    $('admin-verify-code-button').disabled = busy || !emailLogin.challengeId || !/^[0-9]{6}$/.test(emailLogin.code);
+    $('admin-verify-code-button').textContent = t(emailLogin.verifyBusy ? 'adminVerifyingCode' : 'adminVerifyCode');
+    $('admin-token').disabled = busy;
+    $('admin-recovery-submit').disabled = busy;
+    $('logout-button').disabled = logoutBusy;
+    $('logout-button').textContent = t(logoutBusy ? 'adminSigningOut' : 'adminLogout');
+  }
+  function tickEmailLoginCooldown() {
+    if (emailLoginTimer) clearTimeout(emailLoginTimer);
+    emailLoginTimer = null;
+    if (emailLogin.cooldownUntil > Date.now()) {
+      emailLoginTimer = setTimeout(() => {
+        renderEmailLogin();
+        tickEmailLoginCooldown();
+      }, 1000);
+    }
+  }
+  async function requestAdminCode() {
+    if (emailLogin.requestBusy || emailLogin.verifyBusy || recoveryLoginBusy || logoutBusy ||
+      emailLogin.cooldownUntil > Date.now() || !$('admin-email-login-form').reportValidity()) return;
+    const generation = ++adminGeneration;
+    const sequence = ++emailLoginSequence;
+    const state = emailLogin;
+    state.email = $('admin-login-email').value.trim();
+    state.code = ''; state.challengeId = null;
+    state.requestBusy = true;
+    state.cooldownUntil = Date.now() + 60000;
+    renderEmailLogin(); tickEmailLoginCooldown();
+    message('admin-email-login-status', 'adminRequestingCode');
+    try {
+      const result = await api('/api/admin-login/request', {method: 'POST', body: {email: state.email}});
+      if (generation !== adminGeneration || sequence !== emailLoginSequence || state !== emailLogin) return;
+      if (result?.status !== 'check_email' || typeof result.challenge_id !== 'string' ||
+        !/^[A-Za-z0-9_-]{24}$/.test(result.challenge_id)) throw errorFor('adminEmailLoginUnavailable');
+      state.challengeId = result.challenge_id;
+      message('admin-email-login-status', 'adminCodeRequested');
+    } catch (error) {
+      if (generation !== adminGeneration || sequence !== emailLoginSequence || state !== emailLogin) return;
+      message('admin-email-login-status', error.status === 429 ? 'msgRateLimited' : 'adminEmailLoginUnavailable', true);
+    } finally {
+      if (generation === adminGeneration && sequence === emailLoginSequence && state === emailLogin) {
+        state.requestBusy = false;
+        renderEmailLogin();
+        if (state.challengeId) $('admin-login-code').focus();
+      }
+    }
+  }
+  function showAdminDashboard(generation, token) {
+    if (generation !== adminGeneration || adminToken !== token) return false;
+    $('admin-token').value = '';
+    $('admin-recovery-login').open = false;
+    $('admin-login').hidden = true;
+    $('admin-dashboard').hidden = false;
+    resetEmailLogin();
+    message('login-status', '');
+    return true;
+  }
+  async function verifyAdminCode() {
+    const code = $('admin-login-code').value;
+    if (!emailLogin.challengeId || !/^[0-9]{6}$/.test(code) || emailLogin.requestBusy ||
+      emailLogin.verifyBusy || recoveryLoginBusy || logoutBusy) return;
+    const generation = ++adminGeneration;
+    const sequence = ++emailLoginSequence;
+    const state = emailLogin;
+    state.code = code;
+    state.verifyBusy = true;
+    renderEmailLogin();
+    message('admin-email-login-status', 'adminVerifyingCode');
+    try {
+      const result = await api('/api/admin-login/verify', {method: 'POST',
+        body: {challenge_id: state.challengeId, code: state.code}});
+      if (generation !== adminGeneration || sequence !== emailLoginSequence || state !== emailLogin) return;
+      if (result?.status !== 'authenticated' || typeof result.token !== 'string' ||
+        !/^lq_session_[A-Za-z0-9_-]{43}$/.test(result.token) || typeof result.expires_at !== 'string' ||
+        !/(?:Z|[+-][0-9]{2}:[0-9]{2})$/.test(result.expires_at) || !Number.isFinite(Date.parse(result.expires_at))) {
+        throw errorFor('adminEmailLoginUnavailable');
+      }
+      const token = result.token;
+      adminToken = token;
+      state.code = ''; state.challengeId = null;
+      await refreshAdmin();
+      showAdminDashboard(generation, token);
+    } catch (error) {
+      if (error.stale || generation !== adminGeneration || sequence !== emailLoginSequence || state !== emailLogin) return;
+      adminToken = '';
+      message('admin-email-login-status', error.status === 401 ? 'adminCodeInvalid' :
+        error.status === 429 ? 'msgRateLimited' : 'adminEmailLoginUnavailable', true);
+    } finally {
+      if (generation === adminGeneration && sequence === emailLoginSequence && state === emailLogin) {
+        state.verifyBusy = false;
+        renderEmailLogin();
+      }
+    }
+  }
+  async function logout() {
+    if (logoutBusy) return;
+    const token = adminToken;
+    if (!token.startsWith('lq_session_')) { clearAdminSession(); return; }
+    const generation = ++adminGeneration;
+    logoutBusy = true;
+    $('admin-dashboard').hidden = true;
+    $('admin-login').hidden = false;
+    message('admin-email-login-status', 'adminSigningOut');
+    renderEmailLogin();
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 10000);
+    try {
+      await api('/api/admin/logout', {method: 'POST', admin: true, body: {}, signal: controller.signal});
+    } catch { /* Local credentials are cleared even if revocation cannot be confirmed. */ }
+    finally {
+      clearTimeout(timeout);
+      if (generation === adminGeneration && adminToken === token) clearAdminSession();
+      logoutBusy = false;
+      renderEmailLogin();
+    }
+  }
+  function clearAdminSession() {
     adminGeneration += 1;
     adminToken = '';
+    recoveryLoginBusy = false;
+    logoutBusy = false;
+    resetEmailLogin();
     if (previewTimer) clearTimeout(previewTimer);
     previewTimer = null;
     view.adminStatus = null;
@@ -752,6 +946,26 @@
     }
   }
   function adminPage() {
+    $('admin-login-email').addEventListener('input', event => {
+      if (emailLogin.requestBusy || emailLogin.verifyBusy || recoveryLoginBusy || logoutBusy) return;
+      if (emailLogin.email !== event.target.value && emailLogin.challengeId) {
+        emailLogin.challengeId = null;
+        emailLogin.code = '';
+      }
+      emailLogin.email = event.target.value;
+      renderEmailLogin();
+    });
+    $('admin-login-code').addEventListener('input', event => {
+      emailLogin.code = event.target.value;
+      renderEmailLogin();
+    });
+    $('admin-email-login-form').addEventListener('submit', event => {
+      event.preventDefault(); requestAdminCode();
+    });
+    $('admin-code-login-form').addEventListener('submit', event => {
+      event.preventDefault(); verifyAdminCode();
+    });
+    $('admin-resend-code-button').addEventListener('click', requestAdminCode);
     $('moomoo-queries').addEventListener('input', event => {
       const state = moomooSettings;
       if (['loading', 'saving'].includes(state.status)) return;
@@ -769,19 +983,23 @@
     $('moomoo-refresh-button').addEventListener('click', () => loadMoomooSettings({replaceDraft: true}));
     $('login-form').addEventListener('submit', async event => {
       event.preventDefault();
-      adminGeneration += 1;
-      adminToken = $('admin-token').value.trim();
+      if (emailLogin.requestBusy || emailLogin.verifyBusy || recoveryLoginBusy || logoutBusy) return;
+      const generation = ++adminGeneration;
+      emailLoginSequence += 1;
+      const token = $('admin-token').value.trim();
+      adminToken = token;
+      recoveryLoginBusy = true;
+      renderEmailLogin();
       message('login-status', 'validatingAdmin');
       try {
         await refreshAdmin();
-        $('admin-token').value = '';
-        $('admin-login').hidden = true;
-        $('admin-dashboard').hidden = false;
-        message('login-status', '');
+        showAdminDashboard(generation, token);
       } catch (error) {
-        if (error.stale) return;
+        if (error.stale || generation !== adminGeneration) return;
         adminToken = '';
         showError('login-status', error);
+      } finally {
+        if (generation === adminGeneration) { recoveryLoginBusy = false; renderEmailLogin(); }
       }
     });
     $('logout-button').addEventListener('click', logout);

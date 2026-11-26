@@ -77,6 +77,14 @@ python -c "import base64,secrets; print(base64.urlsafe_b64encode(secrets.token_b
 
 启用后，普通名单与已确认的公开订阅合并，退订的外部地址被排除，固定内部名单始终保留。公开注册只先排队确认邮件；点击邮件里的确认按钮后才加入公开订阅。确认邮件在 GitHub 上执行，另有每小时队列恢复。单次提交成功不等于实际收到邮件。
 
+### 管理员邮箱验证码登录
+
+部署邮箱登录功能后，管理员在 `/admin` 输入已加入管理员允许名单的邮箱，再填写邮件中的 6 位验证码。验证码自请求起 10 分钟有效，只能使用一次；不要转发或分享。普通公开订阅不会授予管理员权限，管理员地址不写入公开配置或日志。允许名单由原有 `SPACE_ADMIN_TOKEN` 恢复凭据的专用管理接口维护，普通登录会话不能修改它。
+
+验证码邮件与订阅确认邮件共用固定的 `subscription-mail.yml` 和现有 SMTP Secrets。`SUBSCRIPTIONS_ENABLED` 只控制订阅确认队列；允许名单内的管理员验证码独立处理，不需要新 Secret、额外权限或硬件。HF 不持有邮箱密码，也不通过 SMTP 直接发信。GitHub 排队可能延迟；已过期的验证码不补发，应在页面重新请求。
+
+成功验证后取得 1 小时有效的随机 Bearer 会话，只保留在页面内存中，不写入 URL、localStorage 或 sessionStorage；切换语言保留会话，刷新页面需重新登录。退出会撤销服务端会话。原 `SPACE_ADMIN_TOKEN` 保留为折叠的恢复入口，不通过邮件发送。验证码、请求和会话的持久记录复用现有加密状态；worker 在预留成功后才投递，结果不确定或进程中断时不自动重发。
+
 ### 统一管理 Moomoo 检索关键词
 
 部署含来源设置功能的版本后，在 HF 私人后台 `/admin` 修改并保存 Moomoo 关键词。设置写入现有 `delivery-state` 分支的 `settings/moomoo.json`，通过原有 `STATE_ENCRYPTION_KEY` 加密；HF 临时磁盘和浏览器存储不保存这份持久设置。GitHub 每日日报与 HF 新生成的预览读取同一份设置，`config/friend-sources.json` 仅提供首次未保存设置时的默认关键词。

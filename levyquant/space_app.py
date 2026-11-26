@@ -19,6 +19,7 @@ from urllib.parse import urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 from . import daily
+from .admin_auth import AdminAuthService
 from .editor import EDITOR_ERROR_CODES, EditorError, EditorValidationError
 from .source_settings import (SourceSettingsError, default_moomoo_queries,
                               read_moomoo_settings, validate_moomoo_snapshot,
@@ -33,7 +34,8 @@ MAX_GITHUB_BYTES = 256 * 1024
 PUBLIC_PATH = "public/latest.json"
 _WORKFLOWS = frozenset(("daily-digest.yml", "subscription-mail.yml"))
 _FIELDS = ("date", "subject", "html", "text")
-_PUBLIC_MUTATIONS = frozenset(("/api/subscribe", "/api/confirm", "/api/unsubscribe"))
+_PUBLIC_MUTATIONS = frozenset(("/api/subscribe", "/api/confirm", "/api/unsubscribe",
+                              "/api/admin-login/request", "/api/admin-login/verify"))
 _EDITOR_ISSUE_CODES = frozenset((
     "schema_type", "schema_enum", "missing_field", "unexpected_field",
     "invalid_articles", "invalid_source", "duplicate_source_id", "unsafe_source_url",
@@ -160,11 +162,12 @@ def _body_fields(body: dict, allowed: set[str]) -> None:
 class SpaceApplication:
     def __init__(self, environment=None, *, store_factory=None,
                  subscription_factory=None, github_request=None,
-                 preview_runner=None, static_root=None):
+                 preview_runner=None, static_root=None, admin_auth_factory=None):
         self.environment = dict(os.environ if environment is None else environment)
         self.static_root = Path(static_root or ROOT / "runtime/huggingface/static")
         self._store_factory = store_factory
         self._subscription_factory = subscription_factory
+        self._admin_auth_factory = admin_auth_factory
         self._github_override = github_request
         self._preview_runner = preview_runner or daily.run
         self._preview_lock = threading.Lock()
@@ -209,6 +212,12 @@ class SpaceApplication:
     def _moomoo_settings(self) -> dict:
         return read_moomoo_settings(self._new_store(), self._moomoo_defaults())
 
+    def _new_admin_auth_service(self):
+        environment = self._remote_environment()
+        if self._admin_auth_factory:
+            return self._admin_auth_factory()
+        return AdminAuthService(self._new_store(), environment["STATE_ENCRYPTION_KEY"])
+
     def signup_enabled(self) -> bool:
         try:
             validate_public_base_url(self.environment.get("DIGEST_PUBLIC_BASE_URL", ""))
@@ -218,13 +227,21 @@ class SpaceApplication:
                 and self._repository_valid()
                 and all(self.environment.get(key) for key in ("GITHUB_TOKEN", "STATE_ENCRYPTION_KEY")))
 
-    def authorize(self, header: str | None) -> None:
+    def _authorize_recovery(self, header: str | None) -> None:
         expected = self.environment.get("SPACE_ADMIN_TOKEN", "")
         if not re.fullmatch(r"[A-Za-z0-9_-]{32,256}", expected):
             raise AppError(503, "admin_not_configured")
         supplied = header[7:] if isinstance(header, str) and header.startswith("Bearer ") else ""
         if len(supplied) > 256 or not hmac.compare_digest(supplied.encode("utf-8"), expected.encode("ascii")):
             raise AppError(401, "unauthorized")
+
+    def authorize(self, header: str | None) -> None:
+        supplied = header[7:] if isinstance(header, str) and header.startswith("Bearer ") else ""
+        if re.fullmatch(r"lq_session_[A-Za-z0-9_-]{43}", supplied):
+            if self._new_admin_auth_service().authenticate_session(supplied):
+                return
+            raise AppError(401, "unauthorized")
+        self._authorize_recovery(header)
 
     def public_preview(self) -> dict:
         with self._cache_lock:
@@ -377,6 +394,32 @@ class SpaceApplication:
             self._public_limiter.check(client_id)
         if method == "GET" and path == "/api/public/preview":
             return 200, self.public_preview()
+        if method == "POST" and path == "/api/admin-login/request":
+            _body_fields(body, {"email"})
+            try:
+                email = validate_email(_string(body, "email", 254))
+            except SubscriptionError:
+                raise AppError(400, "invalid_request") from None
+            result = self._new_admin_auth_service().request_login(email, client_id=client_id)
+            identifier = result.get("challenge_id") if isinstance(result, dict) else None
+            if not isinstance(identifier, str) or not re.fullmatch(r"[A-Za-z0-9_-]{24}", identifier):
+                raise AppError(503, "temporarily_unavailable")
+            if result.get("queued") is True:
+                self._dispatch("subscription-mail.yml")
+            return 200, {"status": "check_email", "challenge_id": identifier}
+        if method == "POST" and path == "/api/admin-login/verify":
+            _body_fields(body, {"challenge_id", "code"})
+            identifier, code = _string(body, "challenge_id", 24), _string(body, "code", 6)
+            if not re.fullmatch(r"[A-Za-z0-9_-]{24}", identifier) or not re.fullmatch(r"[0-9]{6}", code):
+                raise AppError(400, "invalid_request")
+            result = self._new_admin_auth_service().verify_login(identifier, code)
+            if not isinstance(result, dict) or result.get("status") != "authenticated":
+                raise AppError(401, "invalid_or_expired")
+            token, expires = result.get("token"), result.get("expires_at")
+            if (not isinstance(token, str) or not re.fullmatch(r"lq_session_[A-Za-z0-9_-]{43}", token)
+                    or not isinstance(expires, str) or len(expires) > 40):
+                raise AppError(503, "temporarily_unavailable")
+            return 200, {"status": "authenticated", "token": token, "expires_at": expires}
         if method == "POST" and path == "/api/subscribe":
             _body_fields(body, {"email", "website"})
             if not self.signup_enabled():
@@ -423,6 +466,27 @@ class SpaceApplication:
             return 200, self._new_subscription_service().admin_suppress(identifier)
         if method == "GET" and path == "/api/admin/status":
             return 200, self._admin_status()
+        if path == "/api/admin/login-emails" and method in ("GET", "POST"):
+            # Changing the administrator allowlist requires the independent
+            # recovery credential, even when a temporary email session is valid.
+            self._authorize_recovery(authorization)
+            if method == "GET":
+                return 200, self._new_admin_auth_service().configured_emails()
+            _body_fields(body, {"emails"})
+            emails = body.get("emails")
+            if not isinstance(emails, list) or not 1 <= len(emails) <= 5:
+                raise AppError(400, "invalid_request")
+            try:
+                normalized = [validate_email(email) for email in emails]
+            except SubscriptionError:
+                raise AppError(400, "invalid_request") from None
+            return 200, self._new_admin_auth_service().configure_emails(normalized)
+        if method == "POST" and path == "/api/admin/logout":
+            _body_fields(body, set())
+            token = authorization[7:] if isinstance(authorization, str) else ""
+            if token.startswith("lq_session_"):
+                self._new_admin_auth_service().logout_session(token)
+            return 200, {"status": "signed_out"}
         if method == "GET" and path == "/api/admin/moomoo-settings":
             return 200, self._moomoo_settings()
         if method == "POST" and path == "/api/admin/moomoo-settings":

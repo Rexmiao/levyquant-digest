@@ -42,7 +42,7 @@ Add these values in the Space's **Settings → Variables and secrets**, using **
 | --- | --- |
 | `GITHUB_TOKEN` | The fine-grained token limited to the one personal digest repository |
 | `STATE_ENCRYPTION_KEY` | The **same existing key** already used by the GitHub workflow; do not generate a replacement |
-| `SPACE_ADMIN_TOKEN` | An independently generated URL-safe random administrator password, at least 32 characters |
+| `SPACE_ADMIN_TOKEN` | The existing independent administrator recovery credential, at least 32 URL-safe characters |
 | `GEMINI_API_KEY` | A key for the owner's verified Gemini Free-tier project |
 
 The existing state key is URL-safe Base64 encoding of 32 random bytes. Copy its original value from your secure backup into HF Secrets. If you cannot recover it, keep protected operations locked and recover the original key; changing the key does not decrypt existing state. Missing keys, wrong keys, or state authentication failures must block operations rather than erase or reset the state.
@@ -58,14 +58,14 @@ Copy that output only into `SPACE_ADMIN_TOKEN` and save it privately. This comma
 | Variable | Value |
 | --- | --- |
 | `GEMINI_FREE_TIER_CONFIRMED` | `true` only after the owner verifies the key's Google project is still Free and has no paid billing enabled |
-| `SUBSCRIPTIONS_ENABLED` | Start with `false`; set `true` only after the GitHub confirmation worker and its matching switch are configured |
+| `SUBSCRIPTIONS_ENABLED` | Controls public subscription requests and confirmation mail; administrator sign-in codes are independent |
 | `DIGEST_PUBLIC_BASE_URL` | `https://<owner>-<space>.hf.space`, using the Space's actual direct application URL |
 
 `GITHUB_REPOSITORY` defaults to the fixed personal repository `Rexmiao/levyquant-digest` and need not be supplied. A different explicit repository is rejected. GitHub Secrets and HF Secrets are separate stores; configuring one does not configure the other.
 
 No `SMTP_APP_PASSWORD`, `SMTP_USERNAME`, or private recipient list is required in HF Secrets. Subscriber addresses are entered by their owners through the application and stored in authenticated encrypted state, not in public source files.
 
-## GitHub confirmation worker and daily delivery
+## GitHub mail worker and daily delivery
 
 Keep the existing GitHub email and model configuration. In that same digest repository:
 
@@ -77,13 +77,19 @@ The daily workflow combines the configured ordinary list, the fixed internal lis
 
 Pending public requests do not receive the daily digest. GitHub Actions sends the confirmation email; the recipient opens the confirmation link and explicitly confirms before becoming active. A link visit alone does not complete consent. Subscription emails include an unsubscribe route. Public unsubscribe controls apply to public subscriptions; fixed internal recipients are maintained separately by the owner.
 
+The same fixed `subscription-mail.yml` also sends queued administrator sign-in codes using the existing SMTP secrets. Only subscription confirmations depend on `SUBSCRIPTIONS_ENABLED`; allowlisted administrator codes remain available independently. The worker requires no new secret, permission or hardware, and HF still does not hold SMTP credentials. Its manual dispatch has no email, code, token or private URL inputs. Both queues reserve messages durably before SMTP, and uncertain or interrupted submissions are not automatically replayed.
+
 ## Public use and owner administration
 
 Visitors can read the currently published preview, request a subscription, confirm it, and unsubscribe. Anonymous requests cannot invoke the model, generate a new digest, or trigger a manual daily mailing. A generic request receipt is not proof that a confirmation email has arrived.
 
 The **中文 / EN** control switches the public and administrator interface, including subscription messages. Only that language preference is saved in browser storage; form entries and administrator credentials are not persisted by the switch. Published briefing content keeps its original language, identified beside the preview.
 
-The owner opens **`/admin`** and supplies `SPACE_ADMIN_TOKEN`. Every protected management API validates this token on the server through **`Authorization: Bearer ...`**. The `/admin` path itself is not an authentication mechanism; no administrative capability is granted just by knowing the URL. Tokens are not passed as URL query parameters.
+The administrator opens **`/admin`**, requests a code for an address on the private administrator allowlist, and enters the emailed six-digit code. The code expires **10 minutes after the request** and is single-use. Do not forward or share it. A public subscription does not grant administrator access, and unknown addresses receive no administrator code. The allowlist is managed only through the dedicated recovery-credential interface; ordinary sign-in sessions cannot change it.
+
+Successful verification issues a random **one-hour Bearer session**. The UI keeps it only in memory, never in URLs, localStorage or sessionStorage. Language switching preserves it; reloading requires signing in again. Explicit sign-out revokes the server-side session. Every protected management API validates `Authorization: Bearer ...` on the server. The original `SPACE_ADMIN_TOKEN` remains available through a collapsed recovery entry and is never emailed. Durable allowlist, login and session records use the existing encrypted state; session tokens are stored there only as hashes.
+
+Administrator requests trigger the existing GitHub mail worker. GitHub scheduling can delay delivery; the worker skips expired requests rather than sending stale codes. If a code expires before arrival, request a new code on the page. Knowing `/admin` alone grants no access.
 
 After configuration, the owner generates a real preview from the live sources, lets the existing schema and evidence checks validate it, then publishes the approved preview. Before a preview is published, the landing page must clearly indicate that a current real preview is unavailable; demo copy is not a live news edition. Do not bypass evidence failures by changing model providers or publishing an unchecked draft.
 
@@ -96,7 +102,7 @@ Saving keywords does not generate a preview or send email. A formal edition alre
 ## Validate before calling it live
 
 1. Confirm the Docker build succeeds and the public landing page loads at the actual HF URL. With credentials absent, protected operations must remain locked.
-2. Configure the original encryption key and restricted GitHub token. Verify protected actions reject missing or incorrect admin tokens and state keys.
+2. Configure the original encryption key and restricted GitHub token. Use the recovery credential to configure only the intended administrator allowlist, then test email-code sign-in, single-use/expired-code rejection and explicit sign-out. Verify protected actions reject missing or incorrect sessions, recovery credentials and state keys without exposing them.
 3. Configure the same public base URL on both services. Test a subscription using an address you control, receive a confirmation through GitHub, explicitly confirm, and verify the active state without exposing addresses in logs.
 4. Verify unsubscribe, then verify an inactive subscription is excluded from subsequent public-list delivery. Keep the configured fixed internal recipients unchanged.
 5. Generate, validate, and publish a real preview from the private owner page. Check that public responses contain the intended published content only.

@@ -101,12 +101,94 @@ class AppTests(unittest.TestCase):
                 ("GET", "/api/admin/preview"), ("POST", "/api/admin/send"),
                 ("POST", "/api/admin/preview"), ("POST", "/api/admin/publish"),
                 ("POST", "/api/admin/subscribers"),
-                ("GET", "/api/admin/moomoo-settings"), ("POST", "/api/admin/moomoo-settings")):
+                ("GET", "/api/admin/moomoo-settings"), ("POST", "/api/admin/moomoo-settings"),
+                ("GET", "/api/admin/login-emails"), ("POST", "/api/admin/login-emails"),
+                ("POST", "/api/admin/logout")):
             with self.subTest(path=path):
                 self.assert_error(401, lambda: self.request(method, path, {}, authorization="Bearer wrong"))
         self.store_factory.assert_not_called()
         self.service_factory.assert_not_called()
         self.github.assert_not_called()
+
+    def test_email_login_request_hides_allowlist_and_only_dispatches_queued_mail(self):
+        auth = Mock()
+        self.app = self.make_app(admin_auth_factory=lambda: auth)
+        for queued in (False, True):
+            auth.request_login.return_value = {"challenge_id": "c" * 24, "queued": queued,
+                                              "private_email": "never-return@example.org"}
+            status, result = self.request("POST", "/api/admin-login/request", {"email": "Owner@example.org"}, None)
+            self.assertEqual((status, result), (200, {"status": "check_email", "challenge_id": "c" * 24}))
+            self.assertNotIn("queued", result)
+        auth.request_login.assert_called_with("owner@example.org", client_id="hashed-ip")
+        self.github.assert_called_once_with("POST",
+            "/repos/Rexmiao/levyquant-digest/actions/workflows/subscription-mail.yml/dispatches", {"ref": "main"})
+
+    def test_email_login_verification_accepts_only_bounded_code_and_session_response(self):
+        auth = Mock()
+        self.app = self.make_app(admin_auth_factory=lambda: auth)
+        auth.verify_login.return_value = {"status": "invalid_or_expired"}
+        self.assert_error(401, lambda: self.request("POST", "/api/admin-login/verify",
+                          {"challenge_id": "c" * 24, "code": "123456"}, None))
+        auth.verify_login.return_value = {"status": "authenticated", "token": "lq_session_" + "s" * 43,
+            "expires_at": "2026-11-26T21:00:00+00:00", "private_record": "must-not-return"}
+        self.assertEqual(self.request("POST", "/api/admin-login/verify",
+                         {"challenge_id": "c" * 24, "code": "001234"}, None), (200,
+            {"status": "authenticated", "token": "lq_session_" + "s" * 43,
+             "expires_at": "2026-11-26T21:00:00+00:00"}))
+        auth.verify_login.assert_called_with("c" * 24, "001234")
+        self.github.assert_not_called()
+
+    def test_invalid_email_login_input_never_constructs_remote_service(self):
+        auth_factory = Mock()
+        cases = [("/api/admin-login/request", {"email": "bad"}),
+                 ("/api/admin-login/request", {"email": "owner@example.org", "role": "admin"}),
+                 ("/api/admin-login/verify", {"challenge_id": "c" * 25, "code": "123456"}),
+                 ("/api/admin-login/verify", {"challenge_id": "c" * 24, "code": 123456}),
+                 ("/api/admin-login/verify", {"challenge_id": "c" * 24, "code": "12345x"}),
+                 ("/api/admin-login/verify", {"challenge_id": "c" * 24, "code": "123456", "email": "other@example.org"})]
+        for path, body in cases:
+            self.app = self.make_app(admin_auth_factory=auth_factory)
+            self.assert_error(400, lambda: self.request("POST", path, body, None))
+        auth_factory.assert_not_called()
+        self.store_factory.assert_not_called()
+
+    def test_email_session_accesses_same_console_but_cannot_change_admin_allowlist(self):
+        auth = Mock()
+        auth.authenticate_session.return_value = True
+        self.app = self.make_app(admin_auth_factory=lambda: auth)
+        session_header = "Bearer lq_session_" + "s" * 43
+        self.assertEqual(self.request("GET", "/api/admin/subscribers", authorization=session_header)[0], 200)
+        self.assertEqual(self.request("GET", "/api/admin/moomoo-settings", authorization=session_header)[0], 200)
+        self.assert_error(401, lambda: self.request("POST", "/api/admin/login-emails",
+                                {"emails": ["extra@example.org"]}, session_header))
+        auth.configure_emails.assert_not_called()
+        auth.authenticate_session.return_value = False
+        self.assert_error(401, lambda: self.request("GET", "/api/admin/status", authorization=session_header))
+
+    def test_recovery_credential_configures_only_explicit_login_email_list(self):
+        auth = Mock()
+        auth.configure_emails.return_value = {"emails": ["first@example.org", "second@example.org"]}
+        auth.configured_emails.return_value = auth.configure_emails.return_value
+        self.app = self.make_app(admin_auth_factory=lambda: auth)
+        self.assertEqual(self.request("POST", "/api/admin/login-emails",
+            {"emails": ["First@example.org", "second@example.org"]}),
+            (200, {"emails": ["first@example.org", "second@example.org"]}))
+        auth.configure_emails.assert_called_once_with(["first@example.org", "second@example.org"])
+        self.assertEqual(self.request("GET", "/api/admin/login-emails"), (200, auth.configured_emails.return_value))
+        self.github.assert_not_called()
+        self.service_factory.assert_not_called()
+
+    def test_session_logout_revokes_the_opaque_token_without_affecting_recovery_key(self):
+        auth = Mock()
+        auth.authenticate_session.return_value = True
+        self.app = self.make_app(admin_auth_factory=lambda: auth)
+        token = "lq_session_" + "s" * 43
+        self.assertEqual(self.request("POST", "/api/admin/logout", {}, "Bearer " + token),
+                         (200, {"status": "signed_out"}))
+        auth.logout_session.assert_called_once_with(token)
+        auth.logout_session.reset_mock()
+        self.assertEqual(self.request("POST", "/api/admin/logout", {}), (200, {"status": "signed_out"}))
+        auth.logout_session.assert_not_called()
 
     def test_missing_or_short_admin_secret_fails_closed(self):
         for token in ("", "short", " ", "x" * 300):
