@@ -77,6 +77,10 @@ The daily workflow combines the configured ordinary list, the fixed internal lis
 
 Pending public requests do not receive the daily digest. GitHub Actions sends the confirmation email; the recipient opens the confirmation link and explicitly confirms before becoming active. A link visit alone does not complete consent. Subscription emails include an unsubscribe route. Public unsubscribe controls apply to public subscriptions; fixed internal recipients are maintained separately by the owner.
 
+Ordinary-recipient digest messages include a footer unsubscribe link plus `List-Unsubscribe` and `List-Unsubscribe-Post: List-Unsubscribe=One-Click` headers backed by a dedicated POST endpoint. GET requests only display a confirmation page, so link scanners do not change subscriptions. Provider presentation remains outside the app's control: Gmail's automatic DKIM signature has not been verified to cover both `List-*` headers, so these headers and endpoint alone do not establish RFC 8058 signature compliance or guarantee a top-of-message unsubscribe button.
+
+Opt-outs and owner suppressions continue to block ordinary recipients retained in `DIGEST_RECIPIENTS`, even when public signup is disabled. Eligibility is checked again before each recipient submission. A message already submitted to SMTP cannot be recalled, and the small interval between the final check and submission cannot provide a recall guarantee. Fixed internal recipients remain protected and receive no public unsubscribe control; only an explicit owner change to their separate configuration removes them.
+
 The same fixed `subscription-mail.yml` also sends queued administrator sign-in codes using the existing SMTP secrets. Only subscription confirmations depend on `SUBSCRIPTIONS_ENABLED`; allowlisted administrator codes remain available independently. The worker requires no new secret, permission or hardware, and HF still does not hold SMTP credentials. Its manual dispatch has no email, code, token or private URL inputs. Both queues reserve messages durably before SMTP, and uncertain or interrupted submissions are not automatically replayed.
 
 ## Public use and owner administration
@@ -90,6 +94,12 @@ The administrator opens **`/admin`**, requests a code for an address on the priv
 Successful verification issues a random **one-hour Bearer session**. The UI keeps it only in memory, never in URLs, localStorage or sessionStorage. Language switching preserves it; reloading requires signing in again. Explicit sign-out revokes the server-side session. Every protected management API validates `Authorization: Bearer ...` on the server. The original `SPACE_ADMIN_TOKEN` remains available through a collapsed recovery entry and is never emailed. Durable allowlist, login and session records use the existing encrypted state; session tokens are stored there only as hashes.
 
 Administrator requests trigger the existing GitHub mail worker. GitHub scheduling can delay delivery; the worker skips expired requests rather than sending stale codes. If a code expires before arrival, request a new code on the page. Knowing `/admin` alone grants no access.
+
+### Delivery activity
+
+The private dashboard separates formal `send` editions from `preview`, self-only `preview-email`, and `smtp-test` runs. Formal-edition counts reflect recorded SMTP outcomes, including accepted, rejected, uncertain, reserved, pending, skipped opt-outs, internal recipients and previously accepted submissions. SMTP acceptance does not prove inbox arrival. Legacy editions without a complete audience snapshot retain unknown totals, internal counts and pending counts rather than inventing them from recipient hashes. Historical GitHub runs without a known mode are not labeled as sent mail.
+
+The CLI records at most 50 credential-free activity rows in the existing encrypted `reports/delivery-activity.json`, merging concurrent runs with CAS. Email addresses, message bodies, URLs, codes and credentials are excluded. HF preview generation does not write CLI activity reports. The dashboard combines these rows with the last seven days of real edition receipts and GitHub run status. No new secret, repository permission, hardware, state migration or key replacement is needed; keep CPU Basic. A report failure does not justify resending an already accepted message.
 
 After configuration, the owner generates a real preview from the live sources, lets the existing schema and evidence checks validate it, then publishes the approved preview. Before a preview is published, the landing page must clearly indicate that a current real preview is unavailable; demo copy is not a live news edition. Do not bypass evidence failures by changing model providers or publishing an unchecked draft.
 

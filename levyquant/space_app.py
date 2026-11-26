@@ -3,7 +3,9 @@ from __future__ import annotations
 
 from collections import deque
 from copy import deepcopy
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
+from email import policy as email_policy
+from email.parser import BytesParser
 import hashlib
 import hmac
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -15,11 +17,13 @@ import tempfile
 import threading
 import time
 from urllib.error import HTTPError, URLError
-from urllib.parse import urlsplit
+from urllib.parse import parse_qsl, urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
+from zoneinfo import ZoneInfo
 
 from . import daily
 from .admin_auth import AdminAuthService
+from .delivery_reports import read_run_reports, summarize_edition
 from .editor import EDITOR_ERROR_CODES, EditorError, EditorValidationError
 from .source_settings import (SourceSettingsError, default_moomoo_queries,
                               read_moomoo_settings, validate_moomoo_snapshot,
@@ -177,6 +181,7 @@ class SpaceApplication:
         self._public_cache = None
         self._public_cache_at = 0.0
         self._public_limiter = _PublicRateLimiter()
+        self._one_click_limiter = _PublicRateLimiter(global_limit=120, client_limit=60)
 
     def _repository_valid(self) -> bool:
         return self.environment.get("GITHUB_REPOSITORY", REPOSITORY) == REPOSITORY
@@ -300,7 +305,9 @@ class SpaceApplication:
             missing.append("GEMINI_FREE_TIER_CONFIRMED")
         if not self._repository_valid():
             missing.append("GITHUB_REPOSITORY")
-        if self.environment.get("SUBSCRIPTIONS_ENABLED", "").lower() == "true" and not self.signup_enabled():
+        try:
+            validate_public_base_url(self.environment.get("DIGEST_PUBLIC_BASE_URL", ""))
+        except SubscriptionError:
             missing.append("DIGEST_PUBLIC_BASE_URL")
         result = {"configured": not missing, "missing": missing, "runs": []}
         if "GITHUB_TOKEN" in missing or "GITHUB_REPOSITORY" in missing or "STATE_ENCRYPTION_KEY" in missing:
@@ -319,6 +326,54 @@ class SpaceApplication:
         except Exception:
             result["runs_error"] = "unavailable"
         return result
+
+    def _delivery_report(self) -> dict:
+        store = self._new_store()
+        today = datetime.now(timezone.utc).astimezone(ZoneInfo("America/New_York")).date()
+        editions = []
+        for offset in range(7):
+            day = (today - timedelta(days=offset)).isoformat()
+            edition = store.load("editions/" + day + ".json")
+            if edition is None:
+                continue
+            daily.validate_frozen_edition(edition, day)
+            if edition.get("mode") == "live":
+                if edition.get("validated") is not True:
+                    raise StateError("Delivery edition is not validated")
+                editions.append(summarize_edition(edition))
+        records = read_run_reports(store)
+        counts = ("recipient_count", "accepted", "rejected", "uncertain", "reserved", "pending",
+                  "skipped_unsubscribed", "internal_count", "already_accepted")
+        runs = {}
+        for record in records:
+            identifier = int(record["run_id"])
+            runs[identifier] = {"id": identifier, "mode": record["mode"], "status": "unknown", "conclusion": None,
+                "html_url": f"https://github.com/{REPOSITORY}/actions/runs/{identifier}",
+                "date": record["date"], "result_status": record["status"],
+                "counts": {key: record.get(key) for key in counts} if record["mode"] == "send" else None,
+                "error_type": record.get("error_type"), "error_code": record.get("error_code")}
+        runs_unavailable = False
+        try:
+            response = self._github("GET", f"/repos/{REPOSITORY}/actions/workflows/daily-digest.yml/runs?per_page=5")
+            for run in response.get("workflow_runs", [])[:5]:
+                if (not isinstance(run, dict) or type(run.get("id")) is not int or run["id"] <= 0
+                        or run.get("html_url") != f"https://github.com/{REPOSITORY}/actions/runs/{run['id']}"):
+                    continue
+                identifier = run["id"]
+                row = runs.setdefault(identifier, {"id": identifier, "mode": None, "date": None,
+                    "html_url": run["html_url"], "result_status": None, "counts": None,
+                    "error_type": None, "error_code": None})
+                row["status"] = run.get("status") if run.get("status") in ("queued", "in_progress", "completed", "waiting", "pending", "requested") else "unknown"
+                row["conclusion"] = run.get("conclusion") if run.get("conclusion") in ("success", "failure", "cancelled", "timed_out", "skipped", "action_required", "neutral", "stale", "startup_failure") else None
+                if row["mode"] is None:
+                    title = run.get("display_title")
+                    mode = re.fullmatch(r"LevyQuant Daily Digest \[(send|preview|preview-email|smtp-test)\]", title) if isinstance(title, str) else None
+                    if mode:
+                        row["mode"] = mode.group(1)
+        except Exception:
+            runs_unavailable = True
+        return {"editions": editions, "runs": [runs[key] for key in sorted(runs, reverse=True)[:50]],
+                "window_days": 7, "runs_unavailable": runs_unavailable}
 
     def _run_preview(self) -> None:
         stage = "preview_setup"
@@ -394,6 +449,18 @@ class SpaceApplication:
             self._public_limiter.check(client_id)
         if method == "GET" and path == "/api/public/preview":
             return 200, self.public_preview()
+        if method == "POST" and path == "/api/one-click-unsubscribe":
+            self._one_click_limiter.check(client_id)
+            _body_fields(body, {"id", "token", "List-Unsubscribe"})
+            identifier, token = _string(body, "id", 24), _string(body, "token", 43)
+            if (body.get("List-Unsubscribe") != "One-Click"
+                    or not re.fullmatch(r"[A-Za-z0-9_-]{24}", identifier)
+                    or not re.fullmatch(r"[A-Za-z0-9_-]{43}", token)):
+                raise AppError(400, "invalid_request")
+            result = self._new_subscription_service().one_click_unsubscribe(identifier, token)
+            if not isinstance(result, dict) or result.get("status") != "unsubscribed":
+                raise AppError(400, "invalid_unsubscribe_link")
+            return 200, {"status": "unsubscribed"}
         if method == "POST" and path == "/api/admin-login/request":
             _body_fields(body, {"email"})
             try:
@@ -456,6 +523,13 @@ class SpaceApplication:
             except StateError as error:
                 return 503, {"error": "state_unavailable", "error_stage": stage,
                              "state_error_type": _private_error_details(error)["error_type"]}
+        if method == "POST" and path == "/api/admin/confirmation-status":
+            _body_fields(body, {"email"})
+            try:
+                email = validate_email(_string(body, "email", 254))
+            except SubscriptionError:
+                raise AppError(400, "invalid_request") from None
+            return 200, self._new_subscription_service().confirmation_delivery_status(email)
         if method == "POST" and path == "/api/admin/subscribers":
             _body_fields(body, {"id", "action"})
             if body.get("action") != "suppress":
@@ -466,6 +540,8 @@ class SpaceApplication:
             return 200, self._new_subscription_service().admin_suppress(identifier)
         if method == "GET" and path == "/api/admin/status":
             return 200, self._admin_status()
+        if method == "GET" and path == "/api/admin/delivery-report":
+            return 200, self._delivery_report()
         if path == "/api/admin/login-emails" and method in ("GET", "POST"):
             # Changing the administrator allowlist requires the independent
             # recovery credential, even when a temporary email session is valid.
@@ -582,7 +658,7 @@ class SpaceRequestHandler(BaseHTTPRequestHandler):
     def send_error(self, code, message=None, explain=None):
         self._respond(code, {"error": "invalid_request"})
 
-    def _json_body(self) -> dict:
+    def _body_size(self) -> int:
         if self.headers.get("Transfer-Encoding") is not None:
             raise AppError(400, "invalid_request")
         lengths = self.headers.get_all("Content-Length", [])
@@ -591,18 +667,58 @@ class SpaceRequestHandler(BaseHTTPRequestHandler):
         size = int(lengths[0])
         if size > MAX_BODY_BYTES:
             raise AppError(413, "request_too_large")
+        return size
+
+    def _body_bytes(self, size: int) -> bytes:
+        raw = self.rfile.read(size)
+        if len(raw) != size:
+            raise AppError(400, "invalid_request")
+        return raw
+
+    def _json_body(self) -> dict:
+        size = self._body_size()
         if self.headers.get_content_type() != "application/json":
             raise AppError(415, "json_required")
         try:
-            raw = self.rfile.read(size)
-            if len(raw) != size:
-                raise ValueError
+            raw = self._body_bytes(size)
             value = json.loads(raw.decode("utf-8"))
         except (ValueError, UnicodeError):
             raise AppError(400, "invalid_request") from None
         if not isinstance(value, dict):
             raise AppError(400, "invalid_request")
         return value
+
+    def _one_click_body(self) -> None:
+        size = self._body_size()
+        content_type = self.headers.get_content_type()
+        if content_type not in ("application/x-www-form-urlencoded", "multipart/form-data"):
+            raise AppError(415, "form_required")
+        raw = self._body_bytes(size)
+        try:
+            if content_type == "application/x-www-form-urlencoded":
+                pairs = parse_qsl(raw.decode("ascii"), keep_blank_values=True, strict_parsing=True,
+                                  max_num_fields=2, encoding="utf-8", errors="strict")
+                valid = pairs == [("List-Unsubscribe", "One-Click")]
+            else:
+                header = self.headers.get("Content-Type", "")
+                boundary = self.headers.get_param("boundary")
+                if (not isinstance(boundary, str) or not re.fullmatch(r"[A-Za-z0-9'()+_,./:=?-]{1,70}", boundary)
+                        or len(header) > 200 or "\r" in header or "\n" in header):
+                    raise ValueError
+                message = BytesParser(policy=email_policy.default).parsebytes(
+                    b"Content-Type: " + header.encode("ascii") + b"\r\nMIME-Version: 1.0\r\n\r\n" + raw)
+                parts = list(message.iter_parts()) if message.is_multipart() else []
+                valid = len(parts) == 1 and not message.defects
+                if valid:
+                    part = parts[0]
+                    valid = (not part.defects and not part.is_multipart() and part.get_filename() is None
+                             and part.get_content_disposition() == "form-data"
+                             and part.get_param("name", header="content-disposition") == "List-Unsubscribe"
+                             and part.get_payload(decode=True) == b"One-Click")
+            if not valid:
+                raise ValueError
+        except (ValueError, TypeError, UnicodeError):
+            raise AppError(400, "invalid_request") from None
 
     def _handle(self):
         try:
@@ -611,6 +727,27 @@ class SpaceRequestHandler(BaseHTTPRequestHandler):
             if parsed.scheme or parsed.netloc or (path.startswith("/api/") and parsed.query):
                 raise AppError(400, "invalid_request")
             app = self.server.application
+            if path == "/one-click-unsubscribe":
+                # GET/HEAD scanners never change state. A valid signed URL plus
+                # the exact receiver POST marker is the sole unsubscribe action.
+                if self.command != "POST":
+                    raise AppError(405, "post_required")
+                if parsed.fragment:
+                    raise AppError(400, "invalid_request")
+                try:
+                    pairs = parse_qsl(parsed.query, keep_blank_values=True, strict_parsing=True,
+                                      max_num_fields=2, encoding="utf-8", errors="strict")
+                    parameters = dict(pairs)
+                    if len(pairs) != 2 or set(parameters) != {"id", "token"}:
+                        raise ValueError
+                except (ValueError, TypeError, UnicodeError):
+                    raise AppError(400, "invalid_request") from None
+                self._one_click_body()
+                client = hashlib.sha256(self.client_address[0].encode("utf-8")).hexdigest()
+                status, response = app.handle_api("POST", "/api/one-click-unsubscribe",
+                    {**parameters, "List-Unsubscribe": "One-Click"}, client_id=client)
+                self._respond(status, response)
+                return
             if path.startswith("/api/"):
                 # Authenticate before reading a potentially slow admin body.
                 if path.startswith("/api/admin/"):

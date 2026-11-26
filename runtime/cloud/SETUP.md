@@ -73,9 +73,19 @@ python -c "import base64,secrets; print(base64.urlsafe_b64encode(secrets.token_b
 
 可部署包与配置见 `runtime/huggingface/README.md`。HF 提供公开预览、邮箱确认订阅、退订和受服务端鉴权保护的 `/admin`；Gmail SMTP 和纽约 07:00 的日程继续由 GitHub 执行。
 
-准备好实际 Space 地址后，在本仓库 Variables 新增 `DIGEST_PUBLIC_BASE_URL=https://<owner>-<space>.hf.space`。确认 HF 与本仓库使用相同状态密钥和公开地址、且确认邮件工作流已部署，再将两端的 `SUBSCRIPTIONS_ENABLED` 设置为 `true`。未启用时，现有普通名单与固定内部名单的每日发送行为保持不变。
+准备好实际 Space 地址后，在本仓库 Variables 新增 `DIGEST_PUBLIC_BASE_URL=https://<owner>-<space>.hf.space`。确认 HF 与本仓库使用相同状态密钥和公开地址、且确认邮件工作流已部署，再将两端的 `SUBSCRIPTIONS_ENABLED` 设置为 `true`。这个开关控制公开注册和订阅确认邮件，已有退订及后台停用记录仍须在每日发送时过滤。
 
 启用后，普通名单与已确认的公开订阅合并，退订的外部地址被排除，固定内部名单始终保留。公开注册只先排队确认邮件；点击邮件里的确认按钮后才加入公开订阅。确认邮件在 GitHub 上执行，另有每小时队列恢复。单次提交成功不等于实际收到邮件。
+
+### 退订与投递看板
+
+非固定内部收件人的正式日报保留页尾退订链接，并增加 `List-Unsubscribe` 与 `List-Unsubscribe-Post: List-Unsubscribe=One-Click` 邮件头及专用退订 POST 接口。打开网页的 GET 请求不修改订阅状态，以免邮件扫描器误触发。Gmail 等邮箱是否显示顶部退订按钮由服务商决定；当前没有实证确认 Gmail 自动生成的 DKIM 签名覆盖这两个 `List-*` 邮件头，不能因此声称已完成 RFC 8058 签名验证或保证按钮显示。
+
+普通邮箱退订或被后台停用后，即使仍在原 `DIGEST_RECIPIENTS` 中、即使关闭公开注册开关，也会被过滤；每位收件人发送前再次核查资格。已经提交给 SMTP 的邮件无法撤回，核查与提交之间的极短竞态也不能保证撤回。固定内部名单独立保留，不附公开退订入口，不受公开退订或后台停用移除；只有所有者明确更改内部配置才能取消。
+
+私人后台投递看板区分 `send`、`preview`、`preview-email` 和 `smtp-test`。只有正式日报展示实际收件人提交统计，包括 accepted、rejected、uncertain、reserved、pending、因退订跳过、内部数量及本轮已存在的 accepted。accepted 仅表示 SMTP 接受，不证明进入收件箱。旧日报缺少完整人数快照时，未知总数、内部数及未处理人数显示为未知，不根据已有哈希记录猜测；旧 GitHub 运行没有模式标识时也不称为已发邮件。
+
+CLI 将最近 50 次安全运行元数据写入现有加密状态的 `reports/delivery-activity.json`，通过 CAS 合并运行记录，不包含邮箱、正文、URL、验证码或密钥。HF 私人预览不写这份 CLI 活动记录，后台结合最近 7 天真实日报状态与 GitHub 运行展示；报告写入失败不会触发重复投递。此功能复用现有凭据与 CPU Basic，无需新 Secret、权限、硬件或旧状态迁移。
 
 ### 管理员邮箱验证码登录
 

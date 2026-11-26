@@ -1,4 +1,5 @@
 name: LevyQuant Daily Digest
+run-name: "LevyQuant Daily Digest [${{ github.event_name == 'schedule' && 'send' || inputs.run_mode || 'preview' }}]"
 
 "on":
   schedule:

@@ -80,6 +80,64 @@ class SubscriptionTests(unittest.TestCase):
         self.assertEqual(self.service.delivery_recipients(["reader@example.org"], ["INTERNAL@example.org"]), ["internal@example.org"])
         self.assertFalse(self.service.request_signup("internal@example.org")["queued"])
 
+    def test_public_merge_switch_never_disables_legacy_optouts_or_internal_protection(self):
+        self.confirm_reader("public@example.org")
+        internal = ["internal@example.org"]
+        self.assertEqual(self.service.delivery_recipients(["legacy@example.org"], internal,
+            include_public_subscribers=False), internal + ["legacy@example.org"])
+        self.service.unsubscribe(*self.link_parts(self.service.unsubscribe_url("legacy@example.org")))
+        self.assertEqual(self.service.delivery_recipients(["legacy@example.org"], internal,
+            include_public_subscribers=False), internal)
+        with patch.object(self.store, "save") as save:
+            self.assertFalse(self.service.is_delivery_allowed("legacy@example.org", internal))
+            self.assertFalse(self.service.is_delivery_allowed("missing@example.org", internal))
+            self.assertTrue(self.service.is_delivery_allowed("public@example.org", internal))
+            save.assert_not_called()
+        self.service.one_click_unsubscribe(*self.link_parts(self.service.one_click_unsubscribe_url(internal[0])))
+        self.assertTrue(self.service.is_delivery_allowed(internal[0], internal))
+
+    def test_one_click_tokens_are_separate_from_web_and_confirmation_tokens(self):
+        confirmation = self.confirm_reader()
+        web = self.service.unsubscribe_url("reader@example.org")
+        click = self.service.one_click_unsubscribe_url("reader@example.org")
+        self.assertEqual(urlsplit(click).path, "/one-click-unsubscribe")
+        identifier, web_token = self.link_parts(web)
+        click_id, click_token = self.link_parts(click)
+        self.assertEqual(click_id, identifier)
+        self.assertNotEqual(web_token, click_token)
+        self.assertEqual(self.service.one_click_unsubscribe(identifier, web_token), {"status": "invalid"})
+        self.assertEqual(self.service.unsubscribe(click_id, click_token), {"status": "invalid"})
+        self.assertEqual(self.service.one_click_unsubscribe(*self.link_parts(confirmation["url"])), {"status": "invalid"})
+        self.assertEqual(self.service.confirm(click_id, click_token), {"status": "invalid_or_expired"})
+        self.assertEqual(self.service.one_click_unsubscribe(click_id, click_token), {"status": "unsubscribed"})
+        self.assertEqual(self.service.one_click_unsubscribe(click_id, click_token), {"status": "unsubscribed"})
+        self.assertFalse(self.service.is_delivery_allowed("reader@example.org", ["internal@example.org"]))
+
+    def test_eligibility_state_failures_block_external_but_fixed_internal_has_priority(self):
+        with patch.object(self.store, "load", side_effect=StateError("Offline unavailable")):
+            with self.assertRaises(StateError):
+                self.service.is_delivery_allowed("reader@example.org", ["internal@example.org"])
+            self.assertTrue(self.service.is_delivery_allowed("INTERNAL@example.org", ["internal@example.org"]))
+
+    def test_confirmation_delivery_status_is_readonly_safe_and_distinguishes_queue_from_acceptance(self):
+        self.service.request_signup("reader@example.org")
+        with patch.object(self.store, "save") as save:
+            queued = self.service.confirmation_delivery_status("READER@example.org")
+            self.assertEqual(queued["subscriber_status"], "pending")
+            self.assertEqual(queued["mail_status"], "queued")
+            self.assertEqual(self.service.confirmation_delivery_status("missing@example.org"), {"status": "not_found"})
+            save.assert_not_called()
+        identifier = self.service.pending_confirmations()[0]["id"]
+        claim = self.service.claim_confirmation(identifier)
+        self.assertEqual(self.service.confirmation_delivery_status("reader@example.org")["mail_status"], "reserved")
+        self.service.mark_confirmation(identifier, "accepted", reservation_id=claim["reservation_id"], stage="data", smtp_code=250)
+        result = self.service.confirmation_delivery_status("reader@example.org")
+        self.assertEqual((result["subscriber_status"], result["mail_status"], result["smtp_code"], result["stage"]),
+                         ("pending", "accepted", 250, "data"))
+        self.assertEqual(set(result), {"subscriber_status", "mail_status", "requested_at", "expires_at", "reserved_at", "completed_at", "smtp_code", "stage"})
+        for sensitive in ("reader@example.org", identifier, claim["url"], claim["reservation_id"]):
+            self.assertNotIn(sensitive, json.dumps(result))
+
     def test_confirm_ttl_and_explicit_resubscribe_do_not_revive_old_token(self):
         claimed = self.claim()
         self.service.mark_confirmation(claimed["id"], "accepted", reservation_id=claimed["reservation_id"])

@@ -91,7 +91,7 @@ class SubscriptionService:
         # not use the AES encryption key directly as their HMAC signing key.
         root = hmac.new(b"LevyQuant subscription key extract v1", _decode_key(signing_key), hashlib.sha256).digest()
         self._keys = {purpose: hmac.new(root, ("levyquant/" + purpose + "/v1\x01").encode(), hashlib.sha256).digest()
-                      for purpose in ("confirm", "unsubscribe", "client-limits")}
+                      for purpose in ("confirm", "unsubscribe", "one-click-unsubscribe", "client-limits")}
         self._clock = now if callable(now) else (lambda: now) if now is not None else (lambda: datetime.now(timezone.utc))
         self.signup_queued = False
 
@@ -179,7 +179,8 @@ class SubscriptionService:
         return base64.urlsafe_b64encode(hmac.new(self._keys[purpose], payload.encode(), hashlib.sha256).digest()).decode().rstrip("=")
 
     def _url(self, record: dict, purpose: str) -> str:
-        path = "/confirm" if purpose == "confirm" else "/unsubscribe"
+        path = {"confirm": "/confirm", "unsubscribe": "/unsubscribe",
+                "one-click-unsubscribe": "/one-click-unsubscribe"}[purpose]
         return self.public_base_url + path + "?" + urlencode({"id": record["id"], "token": self._token(record, purpose)})
 
     def request_signup(self, email: str, client_id: str = "") -> dict:
@@ -257,12 +258,18 @@ class SubscriptionService:
         return self._mutate(change)
 
     def unsubscribe(self, identifier: str, token: str) -> dict:
+        return self._unsubscribe(identifier, token, "unsubscribe")
+
+    def one_click_unsubscribe(self, identifier: str, token: str) -> dict:
+        return self._unsubscribe(identifier, token, "one-click-unsubscribe")
+
+    def _unsubscribe(self, identifier: str, token: str, purpose: str) -> dict:
         invalid = {"status": "invalid"}
         if not isinstance(identifier, str) or not _ID.fullmatch(identifier) or not isinstance(token, str) or not _TOKEN.fullmatch(token):
             return invalid
         def change(registry):
             record = registry["records"].get(identifier)
-            if not record or not hmac.compare_digest(token, self._token(record, "unsubscribe")):
+            if not record or not hmac.compare_digest(token, self._token(record, purpose)):
                 return invalid, False
             if record["status"] in ("unsubscribed", "suppressed"):
                 return {"status": "unsubscribed"}, False
@@ -273,6 +280,23 @@ class SubscriptionService:
     def list_subscribers(self) -> list[dict]:
         fields = ("id", "email", "status", "created_at", "confirmed_at")
         return [{key: record.get(key) for key in fields} for record in self._load()["records"].values()]
+
+    def confirmation_delivery_status(self, email: str) -> dict:
+        """Read only safe delivery metadata; no identifier, address, link or token."""
+        record = self._find(self._load(), validate_email(email))
+        if record is None:
+            return {"status": "not_found"}
+        confirmation = record.get("confirmation") or {}
+        result = {"subscriber_status": record["status"], "mail_status": confirmation.get("status")}
+        for field in ("requested_at", "expires_at", "reserved_at", "completed_at"):
+            value = confirmation.get(field)
+            result[field] = _timestamp(value).isoformat() if value is not None else None
+        code, stage = confirmation.get("smtp_code"), confirmation.get("stage")
+        result["smtp_code"] = code if type(code) is int and 100 <= code <= 599 else None
+        stages = {"validation", "connect", "connection", "greeting", "auth", "authentication", "mail",
+                  "sender", "recipient", "data", "delivery", "prepare", "unknown"}
+        result["stage"] = stage if isinstance(stage, str) and stage in stages else None
+        return result
 
     def admin_suppress(self, identifier: str) -> dict:
         if not isinstance(identifier, str) or not _ID.fullmatch(identifier):
@@ -287,8 +311,9 @@ class SubscriptionService:
             return {"status": "suppressed"}, True
         return self._mutate(change)
 
-    def delivery_recipients(self, subscribers: list[str], internal: list[str]) -> list[str]:
-        if not isinstance(subscribers, list) or not isinstance(internal, list) or not internal:
+    def delivery_recipients(self, subscribers: list[str], internal: list[str], *, include_public_subscribers=True) -> list[str]:
+        if (not isinstance(subscribers, list) or not isinstance(internal, list) or not internal
+                or type(include_public_subscribers) is not bool):
             raise SubscriptionError("Valid subscriber and required internal recipient lists are required")
         subscribers = list(dict.fromkeys(validate_email(value) for value in subscribers))
         internal = list(dict.fromkeys(validate_email(value) for value in internal))
@@ -298,6 +323,8 @@ class SubscriptionService:
             # Fixed internal delivery is an independent operator setting and
             # does not create public subscription/unsubscribe records.
             for email in subscribers:
+                if email in internal:
+                    continue
                 existing = self._find(registry, email)
                 if existing is None:
                     if len(registry["records"]) >= MAX_RECORDS:
@@ -310,7 +337,8 @@ class SubscriptionService:
                     changed = True
             blocked = {record["email"] for record in registry["records"].values()
                        if record["status"] in ("unsubscribed", "suppressed") or record.get("opted_out")}
-            confirmed = [record["email"] for record in registry["records"].values() if record["status"] == "confirmed"]
+            confirmed = [record["email"] for record in registry["records"].values()
+                         if include_public_subscribers and record["status"] == "confirmed"]
             combined = list(dict.fromkeys(internal + [email for email in subscribers + confirmed if email not in blocked]))
             if len(combined) > 100:
                 raise SubscriptionError("More than 100 combined recipients requires a reviewed mailing setup")
@@ -318,6 +346,12 @@ class SubscriptionService:
         return self._mutate(change)
 
     def unsubscribe_url(self, email: str) -> str:
+        return self._unsubscribe_url(email, "unsubscribe")
+
+    def one_click_unsubscribe_url(self, email: str) -> str:
+        return self._unsubscribe_url(email, "one-click-unsubscribe")
+
+    def _unsubscribe_url(self, email: str, purpose: str) -> str:
         email, now = validate_email(email), self._now()
         def change(registry):
             record = self._find(registry, email)
@@ -325,13 +359,26 @@ class SubscriptionService:
                 protect = record["status"] == "pending" and not record.get("legacy_authorized")
                 if protect:
                     record["legacy_authorized"] = True
-                return self._url(record, "unsubscribe"), protect
+                return self._url(record, purpose), protect
             if len(registry["records"]) >= MAX_RECORDS:
                 raise SubscriptionError("Subscription registry capacity reached before delivery")
             record = self._new_record(email, now, status="seeded")
             registry["records"][record["id"]] = record
-            return self._url(record, "unsubscribe"), True
+            return self._url(record, purpose), True
         return self._mutate(change)
+
+    def is_delivery_allowed(self, email: str, internal: list[str]) -> bool:
+        """Read current opt-outs immediately before SMTP; never mutate the registry."""
+        email = validate_email(email)
+        if not isinstance(internal, list):
+            raise SubscriptionError("A valid fixed internal recipient list is required")
+        required = {validate_email(address) for address in internal}
+        if email in required:
+            return True
+        record = self._find(self._load(), email)
+        if record is None or record["status"] in ("unsubscribed", "suppressed") or record.get("opted_out"):
+            return False
+        return record["status"] in ("seeded", "confirmed") or record.get("legacy_authorized") is True
 
     def pending_confirmations(self, limit: int = 20) -> list[dict]:
         if type(limit) is not int or not 1 <= limit <= 20:

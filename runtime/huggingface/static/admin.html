@@ -61,9 +61,32 @@
         </div>
       </section>
       <div class="admin-grid">
-        <section class="edition-card"><div class="section-top"><p class="eyebrow" data-i18n="adminSubscribersEyebrow">SUBSCRIBERS</p><span id="subscriber-count" class="quiet"></span></div><h2 data-i18n="adminSubscribersTitle">Subscriber list</h2><p class="small muted" data-i18n="adminSubscribersCopy">Public subscribers must confirm their email. Fixed internal recipients remain in a separate GitHub list.</p><div class="table-scroll"><table><thead><tr><th data-i18n="adminEmailColumn">Email</th><th data-i18n="adminStatusColumn">Status</th><th data-i18n="adminActionColumn">Manage</th></tr></thead><tbody id="subscribers-body"></tbody></table></div></section>
-        <section class="edition-card"><p class="eyebrow" data-i18n="adminActivityEyebrow">DELIVERY ACTIVITY</p><h2 data-i18n="adminActivityTitle">Delivery runs</h2><p class="small muted" data-i18n="adminActivityCopy">A queued or successful run does not prove inbox arrival. Check delivery results and actual receipt.</p><div id="runs-list" class="runs-list"></div></section>
+        <section class="edition-card subscriber-card"><div class="section-top"><p class="eyebrow" data-i18n="adminSubscribersEyebrow">SUBSCRIBERS</p><span id="subscriber-count" class="quiet"></span></div><h2 data-i18n="adminSubscribersTitle">Subscriber list</h2><p class="small muted" data-i18n="adminSubscribersCopy">Public subscribers must confirm their email. Fixed internal recipients remain in a separate GitHub list.</p><div class="table-scroll"><table><thead><tr><th data-i18n="adminEmailColumn">Email</th><th data-i18n="adminStatusColumn">Status</th><th data-i18n="adminActionColumn">Manage</th></tr></thead><tbody id="subscribers-body"></tbody></table></div></section>
       </div>
+      <section id="delivery-report-panel" class="edition-card delivery-card" aria-labelledby="delivery-report-title">
+        <p class="eyebrow" data-i18n="deliveryEyebrow">FORMAL DAILY EDITIONS</p>
+        <h2 id="delivery-report-title" data-i18n="deliveryTitle">Last 7 days: actual delivery records</h2>
+        <p class="small muted" data-i18n="deliveryCopy">SMTP acceptance means the mail server accepted a submission, not that it reached an inbox. Previously accepted submissions are included in the accepted total.</p>
+        <p class="small muted"><span class="status-badge internal-badge" data-i18n="deliveryInternalBadge">Fixed internal list</span> <span data-i18n="deliveryInternalPolicy">Fixed internal recipients are retained separately, including when public subscribers unsubscribe.</span></p>
+        <p id="delivery-report-status" class="form-status" role="status" aria-live="polite"></p>
+        <div class="delivery-table-scroll" role="region" tabindex="0" aria-label="Formal daily delivery records" data-i18n-aria-label="deliveryTableLabel">
+          <table id="delivery-editions-table" class="delivery-table"><thead><tr>
+            <th data-i18n="deliveryDate">Date</th><th data-i18n="deliveryStatus">Delivery status</th><th data-i18n="deliveryPlanned">Planned</th><th data-i18n="deliveryAccepted">SMTP accepted</th><th data-i18n="deliveryRejected">Rejected</th><th data-i18n="deliveryUncertain">Uncertain</th><th data-i18n="deliveryReserved">Reserved, unconfirmed</th><th data-i18n="deliveryPending">Pending attempt</th><th data-i18n="deliverySkipped">Skipped: unsubscribed</th><th data-i18n="deliveryInternal">Fixed internal</th><th data-i18n="deliveryAlreadyAccepted">Previously accepted</th>
+          </tr></thead><tbody id="delivery-editions-body"></tbody></table>
+        </div>
+        <p class="small muted delivery-footnote" data-i18n="deliveryUnknownCopy">— means unknown. Historical counts may be incomplete; workflow success is never used to invent delivery counts.</p>
+      </section>
+      <section id="delivery-runs-panel" class="edition-card delivery-card" aria-labelledby="delivery-runs-title">
+        <p class="eyebrow" data-i18n="deliveryRunsEyebrow">WORKFLOW DETAILS</p>
+        <h2 id="delivery-runs-title" data-i18n="deliveryRunsTitle">Workflow runs by mode</h2>
+        <p class="small muted" data-i18n="deliveryRunsCopy">Preview, preview email and SMTP tests are separate from formal daily delivery. A successful workflow describes the process result only.</p>
+        <p id="delivery-runs-status" class="form-status" role="status" aria-live="polite"></p>
+        <div id="runs-list" class="runs-list">
+          <div class="delivery-table-scroll" role="region" tabindex="0" aria-label="Workflow run details" data-i18n-aria-label="deliveryRunsTableLabel">
+            <table id="delivery-runs-table" class="delivery-table delivery-runs-table"><thead><tr><th data-i18n="deliveryDate">Date</th><th data-i18n="deliveryRun">Run</th><th data-i18n="deliveryMode">Mode</th><th data-i18n="deliveryWorkflowResult">Workflow result</th><th data-i18n="deliveryBusinessResult">Recorded task result</th><th data-i18n="deliveryCounts">Recorded counts</th><th data-i18n="deliveryDiagnostic">Diagnostic</th></tr></thead><tbody id="delivery-runs-body"></tbody></table>
+          </div>
+        </div>
+      </section>
       <section id="private-preview-panel" class="edition-card private-preview" hidden><div class="section-top"><p class="eyebrow" data-i18n="adminDraftEyebrow">PRIVATE DRAFT</p><span id="private-preview-date" class="quiet"></span></div><h2 data-i18n="adminDraftTitle">Preview awaiting publication</h2><p class="small muted" data-i18n="adminDraftCopy">Visitors can see this draft only after you choose Publish to public page.</p><iframe id="private-preview" class="digest-frame" title="Private LevyQuant preview" data-i18n-title="privatePreviewTitle" sandbox="allow-popups allow-popups-to-escape-sandbox"></iframe></section>
     </section>
   </main>

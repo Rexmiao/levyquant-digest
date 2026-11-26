@@ -13,6 +13,7 @@ from unittest.mock import Mock, patch
 from urllib.parse import parse_qs, urlsplit
 
 from levyquant import daily
+from levyquant.delivery_reports import read_run_reports, record_run_report
 from levyquant.smtp_delivery import DeliveryError, DeliveryUncertain
 from levyquant.state_store import GitHubStateStore, LocalStateStore, StateConflict, StateError
 from levyquant.subscriptions import SubscriptionService
@@ -108,7 +109,9 @@ class BusinessTests(unittest.TestCase):
         self.send(first)
         second = Mock()
         result = self.send(second, value=self.store.load(PATH))
-        self.assertEqual(result, {"recipient_count": 2, "accepted": 1, "blocked_or_failed": 1})
+        self.assertEqual({key: result[key] for key in ("recipient_count", "accepted", "blocked_or_failed")},
+                         {"recipient_count": 2, "accepted": 1, "blocked_or_failed": 1})
+        self.assertEqual(result["uncertain"], 1)
         second.assert_not_called()
 
     def test_partial_rerun_only_retries_explicitly_rejected_recipient(self):
@@ -156,9 +159,52 @@ class BusinessTests(unittest.TestCase):
         self.value["deliveries"][daily.recipient_key(RECIPIENTS[0])] = {"status": "unrecognized"}
         self.store.save(PATH, self.value)
         transport = Mock(return_value={"status": "accepted"})
-        result = self.send(transport)
-        self.assertEqual(transport.call_count, 1)
-        self.assertEqual(result["blocked_or_failed"], 1)
+        with self.assertRaisesRegex(daily.ConfigurationError, "unsupported"):
+            self.send(transport)
+        transport.assert_not_called()
+
+
+    def test_midflight_optout_after_persisted_reservation_skips_smtp_without_changing_body(self):
+        service = SubscriptionService(self.store, base64.urlsafe_b64encode(b"s" * 32).decode(),
+                                      "https://example-digest.hf.space", now=NOW)
+        service.delivery_recipients(RECIPIENTS, [RECIPIENTS[0]])
+        params = parse_qs(urlsplit(service.one_click_unsubscribe_url(RECIPIENTS[1])).query)
+        original_save, withdrawn = self.store.save, []
+        def save(path, value):
+            original_save(path, value)
+            row = value.get("deliveries", {}).get(daily.recipient_key(RECIPIENTS[1]), {})
+            if path == PATH and row.get("status") == "reserved" and not withdrawn:
+                withdrawn.append(True)
+                service.one_click_unsubscribe(params["id"][0], params["token"][0])
+        transport = Mock(return_value={"status": "accepted"})
+        with patch.object(self.store, "save", side_effect=save):
+            result = daily.deliver_edition(self.store, PATH, self.value, RECIPIENTS,
+                sender="sender@example.com", password="offline", execution_id="test", transport=transport,
+                subscription_service=service, internal_recipients=[RECIPIENTS[0]])
+        self.assertEqual([str(call.args[0]["To"]) for call in transport.call_args_list], [RECIPIENTS[0]])
+        self.assertEqual((result["accepted"], result["skipped_unsubscribed"], result["blocked_or_failed"]), (1, 1, 0))
+        frozen = self.store.load(PATH)
+        skipped = frozen["deliveries"][daily.recipient_key(RECIPIENTS[1])]
+        self.assertEqual((skipped["status"], skipped["reason"]), ("skipped_unsubscribed", "subscription_not_allowed"))
+        self.assertNotIn(RECIPIENTS[1], json.dumps(skipped))
+        self.assertEqual(frozen["delivery_summary"]["internal_count"], 1)
+        self.assertEqual(frozen["content_sha256"], daily.edition_fingerprint(frozen))
+        self.assertIsNone(transport.call_args.args[0]["List-Unsubscribe"])
+
+    def test_failed_eligibility_read_after_reservation_blocks_transport_and_remains_reserved(self):
+        service, transport = Mock(), Mock()
+        service.is_delivery_allowed.side_effect = [True, StateError("Offline eligibility failure")]
+        query = "?id=" + "a" * 24 + "&token=" + "b" * 43
+        service.unsubscribe_url.return_value = "https://example-digest.hf.space/unsubscribe" + query
+        service.one_click_unsubscribe_url.return_value = "https://example-digest.hf.space/one-click-unsubscribe" + query
+        with self.assertRaises(StateError):
+            daily.deliver_edition(self.store, PATH, self.value, [RECIPIENTS[1]],
+                sender="sender@example.com", password="offline", execution_id="test", transport=transport,
+                subscription_service=service, internal_recipients=[RECIPIENTS[0]])
+        transport.assert_not_called()
+        frozen = self.store.load(PATH)
+        self.assertEqual(frozen["deliveries"][daily.recipient_key(RECIPIENTS[1])]["status"], "reserved")
+        self.assertEqual(frozen["delivery_summary"]["reserved"], 1)
 
 
 class InputAndPipelineTests(unittest.TestCase):
@@ -179,7 +225,7 @@ class InputAndPipelineTests(unittest.TestCase):
             "GITHUB_RUN_ID": "123", "GITHUB_RUN_ATTEMPT": "1", "DIGEST_RECIPIENTS": json.dumps(RECIPIENTS),
             "DIGEST_INTERNAL_RECIPIENTS": json.dumps([RECIPIENTS[0]]),
             "STATE_ENCRYPTION_KEY": base64.urlsafe_b64encode(b"x" * 32).decode(),
-            "SMTP_USERNAME": "sender@example.com"}
+            "SMTP_USERNAME": "sender@example.com", "DIGEST_PUBLIC_BASE_URL": "https://example-digest.hf.space"}
         self.editor = {"sections": [{"id": "geopolitics_macro", "items": [{
             "title": "Policy release", "summary": QUOTE, "analysis": "", "source_ids": ["article_0001"],
             "evidence": [{"source_id": "article_0001", "quote": QUOTE}], "event_time": None}]}]}
@@ -446,8 +492,8 @@ class InputAndPipelineTests(unittest.TestCase):
         self.assertEqual(result["recipient_count"], 3)
         self.assertEqual(result["accepted"], 3)
         self.assertEqual(self.smtp.call_count, 3)
-        self.assertEqual([str(call.args[0]["To"]) for call in self.smtp.call_args_list],
-                         ["one@example.org", "two@example.org", "internal@example.org"])
+        self.assertEqual({str(call.args[0]["To"]) for call in self.smtp.call_args_list},
+                         {"one@example.org", "two@example.org", "internal@example.org"})
         replacement = {**environment, "DIGEST_RECIPIENTS": "new-subscriber@example.org"}
         self.assertEqual(daily.preflight(self.config, "send", replacement),
                          ["new-subscriber@example.org", "one@EXAMPLE.org", "internal@example.org"])
@@ -555,10 +601,10 @@ class InputAndPipelineTests(unittest.TestCase):
         self.assertEqual(latest["text"], frozen["text"])
         self.assertNotIn("public-reader@example.org", json.dumps(latest))
 
-    def test_subscription_flag_disabled_or_preview_never_initializes_service(self):
-        with patch("levyquant.daily.SubscriptionService") as service:
+    def test_subscription_flag_disabled_still_filters_optouts_but_previews_do_not_initialize_service(self):
+        with patch("levyquant.daily.SubscriptionService", wraps=SubscriptionService) as service:
             daily.run(self.config, "send", self.environment, self.root / "outputs")
-            service.assert_not_called()
+            service.assert_called_once()
         for mode in ("preview", "preview-email", "smtp-test"):
             with self.subTest(mode=mode), patch("levyquant.daily.SubscriptionService") as service:
                 environment = {**self.environment, "SUBSCRIPTIONS_ENABLED": "true"}
@@ -566,7 +612,7 @@ class InputAndPipelineTests(unittest.TestCase):
                 service.assert_not_called()
 
     def test_subscription_base_url_is_required_before_network_and_latest_needs_acceptance(self):
-        environment = {**self.environment, "SUBSCRIPTIONS_ENABLED": "true"}
+        environment = {key: value for key, value in self.environment.items() if key != "DIGEST_PUBLIC_BASE_URL"}
         with self.assertRaises(StateError):
             daily.run(self.config, "send", environment, self.root / "outputs")
         self.factory.assert_not_called()
@@ -576,6 +622,76 @@ class InputAndPipelineTests(unittest.TestCase):
         result = daily.run(self.config, "send", self.environment, self.root / "outputs")
         self.assertEqual(result["accepted"], 0)
         self.assertIsNone(TestStore(self.root / "remote").load("public/latest.json"))
+
+    def test_disabled_registration_respects_existing_optout_and_skips_are_not_failures(self):
+        store = TestStore(self.root / "remote")
+        service = SubscriptionService(store, self.environment["STATE_ENCRYPTION_KEY"],
+                                      self.environment["DIGEST_PUBLIC_BASE_URL"], now=NOW)
+        service.delivery_recipients(RECIPIENTS, [RECIPIENTS[0]], include_public_subscribers=False)
+        params = parse_qs(urlsplit(service.one_click_unsubscribe_url(RECIPIENTS[1])).query)
+        service.one_click_unsubscribe(params["id"][0], params["token"][0])
+        result = daily.run(self.config, "send", {**self.environment, "SUBSCRIPTIONS_ENABLED": "false"}, self.root / "outputs")
+        self.assertEqual(result["status"], "all_submissions_accepted")
+        self.assertEqual((result["recipient_count"], result["accepted"], result["skipped_unsubscribed"], result["blocked_or_failed"]), (2, 1, 1, 0))
+        self.assertEqual([str(call.args[0]["To"]) for call in self.smtp.call_args_list], [RECIPIENTS[0]])
+        self.assertIsNone(self.smtp.call_args.args[0]["List-Unsubscribe"])
+        frozen = TestStore(self.root / "remote").load(PATH)
+        self.assertEqual(frozen["delivery_summary"]["skipped_unsubscribed"], 1)
+        self.assertEqual(frozen["content_sha256"], daily.edition_fingerprint(frozen))
+        self.smtp.reset_mock()
+        daily.run(self.config, "preview-email", self.environment, self.root / "private-preview")
+        self.assertIsNone(self.smtp.call_args.args[0]["List-Unsubscribe"])
+        self.assertIsNone(self.smtp.call_args.args[0]["List-Unsubscribe-Post"])
+
+    def test_gha_records_running_and_completed_safe_reports_for_all_modes(self):
+        statuses = {"preview": "preview_ready_no_mail_sent", "preview-email": "preview_email_accepted",
+                    "smtp-test": "accepted", "send": "all_submissions_accepted"}
+        for index, (mode, status) in enumerate(statuses.items()):
+            environment = {**self.environment, "GITHUB_ACTIONS": "true", "GITHUB_REPOSITORY": daily.REPOSITORY,
+                           "GITHUB_RUN_ID": str(700 + index)}
+            with self.subTest(mode=mode), patch.dict("os.environ", environment, clear=True), \
+                    patch("levyquant.daily.read_json", return_value=self.config), \
+                    patch("levyquant.daily.run", return_value={"mode": mode, "status": status, "date": DATE}) as run, \
+                    patch("levyquant.daily.record_run_report", wraps=record_run_report) as record, redirect_stdout(StringIO()):
+                self.assertEqual(daily.main(["--mode", mode]), 0)
+            run.assert_called_once()
+            self.assertEqual([call.args[1]["status"] for call in record.call_args_list], ["running", "completed"])
+        reports = read_run_reports(TestStore(self.root / "remote"))
+        self.assertEqual(len(reports), 4)
+        self.assertTrue(all(report["status"] == "completed" for report in reports))
+        self.assertNotIn("message", json.dumps(reports))
+        self.assertNotIn("@", json.dumps(reports))
+        self.smtp.assert_not_called()
+
+    def test_gha_failed_reports_are_machine_only_and_reporting_failure_never_replays_pipeline(self):
+        environment = {**self.environment, "GITHUB_ACTIONS": "true", "GITHUB_REPOSITORY": daily.REPOSITORY,
+                       "GITHUB_RUN_ID": "800"}
+        with patch.dict("os.environ", environment, clear=True), patch("levyquant.daily.read_json", return_value=self.config), \
+                patch("levyquant.daily.run", side_effect=StateError("private@example.org token=not-a-real-token https://provider.example/private")), \
+                redirect_stdout(StringIO()):
+            self.assertEqual(daily.main(["--mode", "preview"]), 1)
+        report = read_run_reports(TestStore(self.root / "remote"))[0]
+        self.assertEqual((report["status"], report["error_type"], report["error_code"]), ("failed", "StateError", "execution_failed"))
+        for sensitive in ("private@example.org", "not-a-real-token", "provider.example", "message"):
+            self.assertNotIn(sensitive, json.dumps(report))
+        with patch.dict("os.environ", {**environment, "GITHUB_RUN_ID": "801"}, clear=True), \
+                patch("levyquant.daily.read_json", return_value=self.config), \
+                patch("levyquant.daily.record_run_report", side_effect=StateError("Offline report failure")), \
+                patch("levyquant.daily.run", return_value={"status": "preview_ready_no_mail_sent"}) as run, redirect_stdout(StringIO()):
+            self.assertEqual(daily.main(["--mode", "preview"]), 0)
+        run.assert_called_once()
+        self.assertEqual(json.loads((self.root / "outputs/run-summary.json").read_text())["run_report_status"], "unavailable")
+        self.smtp.assert_not_called()
+
+    def test_invalid_gha_preflight_never_opens_report_state_or_invokes_pipeline(self):
+        environment = {**self.environment, "GITHUB_ACTIONS": "true", "GITHUB_REPOSITORY": daily.REPOSITORY,
+                       "GITHUB_RUN_ID": "900", "DIGEST_ENABLED": "false"}
+        with patch.dict("os.environ", environment, clear=True), patch("levyquant.daily.read_json", return_value=self.config), \
+                patch("levyquant.daily.run") as run, redirect_stdout(StringIO()):
+            self.assertEqual(daily.main(["--mode", "send"]), 1)
+        run.assert_not_called()
+        self.factory.assert_not_called()
+        self.smtp.assert_not_called()
 
     def test_partial_acceptance_can_publish_only_the_safe_base_edition(self):
         self.smtp.side_effect = [DeliveryError("offline rejection", stage="recipient", smtp_code=550), {"status": "accepted"}]

@@ -332,6 +332,77 @@
     adminSigningOut: '正在退出登录…',
     adminRecoverySummary: '使用恢复凭证'
   });
+  Object.assign(TEXT.en, {
+    deliveryEyebrow: 'FORMAL DAILY EDITIONS', deliveryTitle: 'Last 7 days: actual delivery records',
+    deliveryCopy: 'SMTP acceptance means the mail server accepted a submission, not that it reached an inbox. Previously accepted submissions are included in the accepted total.',
+    deliveryInternalBadge: 'Fixed internal list',
+    deliveryInternalPolicy: 'Fixed internal recipients are retained separately, including when public subscribers unsubscribe.',
+    deliveryTableLabel: 'Formal daily delivery records', deliveryDate: 'Date', deliveryStatus: 'Delivery status',
+    deliveryPlanned: 'Planned', deliveryAccepted: 'SMTP accepted', deliveryRejected: 'Rejected',
+    deliveryUncertain: 'Uncertain', deliveryReserved: 'Reserved, unconfirmed', deliveryPending: 'Pending attempt',
+    deliverySkipped: 'Skipped: unsubscribed', deliveryInternal: 'Fixed internal', deliveryAlreadyAccepted: 'Previously accepted',
+    deliveryUnknownCopy: '— means unknown. Historical counts may be incomplete; workflow success is never used to invent delivery counts.',
+    deliveryRunsEyebrow: 'WORKFLOW DETAILS', deliveryRunsTitle: 'Workflow runs by mode',
+    deliveryRunsCopy: 'Preview, preview email and SMTP tests are separate from formal daily delivery. A successful workflow describes the process result only.',
+    deliveryRunsTableLabel: 'Workflow run details', deliveryRun: 'Run', deliveryMode: 'Mode',
+    deliveryWorkflowResult: 'Workflow result', deliveryBusinessResult: 'Recorded task result',
+    deliveryCounts: 'Recorded counts', deliveryDiagnostic: 'Diagnostic', deliveryLoading: 'Loading delivery records…',
+    deliveryUnavailable: 'Delivery records are temporarily unavailable. Refresh status to try again; other dashboard controls remain available.',
+    deliveryNoEditions: 'No formal daily editions were recorded in this seven-day window.',
+    deliveryNoRuns: 'No workflow runs were recorded in this report.',
+    deliveryRunsUnavailable: 'Live workflow history is unavailable. Saved run records may be incomplete.',
+    deliveryLegacyCounts: 'Historical counts incomplete', deliveryUnknown: 'Unknown',
+    deliveryModeSend: 'Formal send', deliveryModePreview: 'Preview only',
+    deliveryModePreviewEmail: 'Preview email to sender', deliveryModeSmtpTest: 'SMTP self-test',
+    deliveryModeUnknown: 'Historical mode unknown', deliveryWorkflowSuccess: 'Workflow succeeded; not proof of delivery',
+    deliveryWorkflowFailed: 'Workflow failed', deliveryWorkflowUnknown: 'Workflow result unknown',
+    deliveryResultRunning: 'Processing', deliveryResultCompleted: 'Task processed',
+    deliveryResultFailed: 'Task failed', deliveryNeedsAttention: 'Needs review',
+    deliveryAllAccepted: 'SMTP acceptance recorded', deliveryPrepared: 'Prepared; submission pending',
+    deliveryNoRecipients: 'No planned recipients', deliveryUncertainStatus: 'Submission outcome uncertain',
+    deliveryEditionCompleted: 'Submission attempts completed', deliveryWorkflowNeutral: 'Workflow ended: neutral',
+    deliveryWorkflowStale: 'Workflow result stale', deliveryWorkflowStartupFailed: 'Workflow could not start'
+  });
+  Object.assign(TEXT.zh, {
+    deliveryEyebrow: '正式日报投递', deliveryTitle: '最近 7 天：实际投递记录',
+    deliveryCopy: 'SMTP 接受表示邮件服务器已接受提交，不代表已进入收件箱。“此前已接受”已包含在接受总数内，不重复相加。',
+    deliveryInternalBadge: '固定内部名单',
+    deliveryInternalPolicy: '固定内部收件人独立保留，不随公开订阅者退订而移除。',
+    deliveryTableLabel: '正式日报投递记录', deliveryDate: '日期', deliveryStatus: '投递状态',
+    deliveryPlanned: '计划人数', deliveryAccepted: 'SMTP 接受', deliveryRejected: '明确失败',
+    deliveryUncertain: '结果不确定', deliveryReserved: '预约未确认', deliveryPending: '等待尝试',
+    deliverySkipped: '退订跳过', deliveryInternal: '固定内部', deliveryAlreadyAccepted: '此前已接受',
+    deliveryUnknownCopy: '— 表示未知。历史计数可能不完整，不会根据工作流成功推算投递人数。',
+    deliveryRunsEyebrow: '工作流明细', deliveryRunsTitle: '按运行模式查看工作流',
+    deliveryRunsCopy: '仅预览、预览邮件和 SMTP 自测与正式日报投递分别列示。工作流成功只表示流程结果。',
+    deliveryRunsTableLabel: '工作流运行明细', deliveryRun: '运行', deliveryMode: '模式',
+    deliveryWorkflowResult: '流程结果', deliveryBusinessResult: '已记录任务结果',
+    deliveryCounts: '已记录计数', deliveryDiagnostic: '诊断', deliveryLoading: '正在加载投递记录…',
+    deliveryUnavailable: '投递看板暂时不可用，请刷新状态重试；其他后台功能仍可使用。',
+    deliveryNoEditions: '最近七天尚无已记录的正式日报。', deliveryNoRuns: '此报表尚无工作流运行记录。',
+    deliveryRunsUnavailable: '暂时无法读取实时工作流历史，以下已保存运行记录可能不完整。',
+    deliveryLegacyCounts: '历史计数不完整', deliveryUnknown: '未知',
+    deliveryModeSend: '正式发送', deliveryModePreview: '仅预览', deliveryModePreviewEmail: '预览邮件（仅发件人）',
+    deliveryModeSmtpTest: 'SMTP 自测', deliveryModeUnknown: '历史模式未知',
+    deliveryWorkflowSuccess: '流程成功（不代表送达）', deliveryWorkflowFailed: '流程失败',
+    deliveryWorkflowUnknown: '流程结果未知', deliveryResultRunning: '处理中',
+    deliveryResultCompleted: '任务已处理', deliveryResultFailed: '任务失败', deliveryNeedsAttention: '需要核验',
+    deliveryAllAccepted: '已记录 SMTP 接受', deliveryPrepared: '已准备，等待提交',
+    deliveryNoRecipients: '无计划收件人', deliveryUncertainStatus: '提交结果不确定',
+    deliveryEditionCompleted: '投递尝试已结束', deliveryWorkflowNeutral: '流程结束（中性结果）',
+    deliveryWorkflowStale: '流程结果已过期', deliveryWorkflowStartupFailed: '流程未能启动'
+  });
+  const DELIVERY_COUNT_FIELDS = [
+    ['recipient_count', 'deliveryPlanned'], ['accepted', 'deliveryAccepted'], ['rejected', 'deliveryRejected'],
+    ['uncertain', 'deliveryUncertain'], ['reserved', 'deliveryReserved'], ['pending', 'deliveryPending'],
+    ['skipped_unsubscribed', 'deliverySkipped'], ['internal_count', 'deliveryInternal'],
+    ['already_accepted', 'deliveryAlreadyAccepted']
+  ];
+  const DELIVERY_ERROR_TYPES = new Set(['Exception', 'RuntimeError', 'ValueError', 'TypeError',
+    'ConfigurationError', 'EditorError', 'EditorValidationError', 'StateError', 'StateConflict',
+    'DeliveryError', 'DeliveryUncertain', 'SourceSettingsError', 'AdminAuthError']);
+  const DELIVERY_ERROR_CODES = new Set(['execution_failed', 'configuration_failed', 'source_failed',
+    'editor_failed', 'editor_validation_failed', 'state_failed', 'smtp_failed', 'unknown_error']);
   const STATE_KEYS = {
     pending: 'statePending', confirmed: 'stateConfirmed', seeded: 'stateSeeded',
     suppressed: 'stateSuppressed', unsubscribed: 'stateUnsubscribed',
@@ -351,12 +422,14 @@
   let logoutBusy = false;
   let previewTimer = null;
   let moomooLoadSequence = 0;
+  let deliveryLoadSequence = 0;
   let moomooSettings = emptyMoomooSettings();
   const currentMessages = new Map();
   const pendingSubscriberActions = new Set();
   const view = {
     edition: null, signupEnabled: false, signupSubmitting: false, flow: null,
-    subscribers: [], subscribersUnavailable: false, runs: [], runsUnavailable: false, adminStatus: null
+    subscribers: [], subscribersUnavailable: false, runs: [], runsUnavailable: false, adminStatus: null,
+    deliveryReport: null, deliveryReportState: 'idle'
   };
   function t(key, values = {}) {
     const value = TEXT[language][key] || TEXT.en[key] || key;
@@ -453,7 +526,7 @@
     if (document.body.dataset.page === 'admin') {
       if (view.adminStatus) renderAdminStatus();
       renderSubscribers();
-      renderRuns();
+      renderDeliveryReport();
       renderMoomooSettings();
       renderEmailLogin();
     } else {
@@ -709,6 +782,9 @@
     view.runs = [];
     view.subscribersUnavailable = false;
     view.runsUnavailable = false;
+    deliveryLoadSequence += 1;
+    view.deliveryReport = null;
+    view.deliveryReportState = 'idle';
     pendingSubscriberActions.clear();
     moomooLoadSequence += 1;
     moomooSettings.draft = '';
@@ -720,7 +796,7 @@
     $('admin-dashboard').hidden = true;
     $('admin-login').hidden = false;
     $('subscribers-body').replaceChildren();
-    $('runs-list').replaceChildren();
+    renderDeliveryReport();
     $('private-preview').srcdoc = '';
     $('private-preview-panel').hidden = true;
     $('publish-button').disabled = true;
@@ -784,23 +860,172 @@
       row.append(email, state, action); tbody.append(row);
     }
   }
-  function renderRuns() {
-    const container = $('runs-list');
-    if (!container) return;
-    container.replaceChildren();
-    if (view.runsUnavailable) { container.textContent = t('runsUnavailable'); return; }
-    if (!view.runs.length) { container.textContent = t('noRuns'); return; }
-    for (const run of view.runs) {
-      const row = document.createElement('div'); row.className = 'run-item';
-      const link = document.createElement('a');
-      if (typeof run.html_url === 'string' && /^https:\/\/github\.com\/Rexmiao\/levyquant-digest\/actions\/runs\/\d+$/.test(run.html_url)) {
-        link.href = run.html_url; link.target = '_blank'; link.rel = 'noopener noreferrer';
-      }
-      link.textContent = t('runLabel', {id: run.id || '—'});
-      const state = document.createElement('span');
-      state.textContent = t(STATE_KEYS[run.conclusion || run.status] || 'stateUnknown');
-      row.append(link, state); container.append(row);
+  function deliveryCount(value) {
+    return Number.isSafeInteger(value) && value >= 0 ? String(value) : '—';
+  }
+  function deliveryDate(value) {
+    // Keep the recorded date/offset; never guess a missing timezone.
+    return typeof value === 'string' && /^\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?(?:Z|[+-]\d{2}:\d{2})?)?$/.test(value) ? value : '—';
+  }
+  function deliveryCell(value, className = '') {
+    const cell = document.createElement('td');
+    cell.textContent = value;
+    if (className) cell.className = className;
+    return cell;
+  }
+  function deliveryEmptyRow(body, columns, key) {
+    const row = document.createElement('tr');
+    const cell = deliveryCell(t(key), 'delivery-empty');
+    cell.colSpan = columns;
+    row.append(cell); body.append(row);
+  }
+  function deliveryBadge(key) {
+    const badge = document.createElement('span');
+    badge.className = 'status-badge delivery-badge';
+    badge.textContent = t(key);
+    return badge;
+  }
+  function deliveryWorkflowKey(run) {
+    const conclusions = {success: 'deliveryWorkflowSuccess', failure: 'deliveryWorkflowFailed',
+      cancelled: 'stateCancelled', timed_out: 'stateTimedOut', skipped: 'stateSkipped',
+      action_required: 'stateActionRequired', neutral: 'deliveryWorkflowNeutral',
+      stale: 'deliveryWorkflowStale', startup_failure: 'deliveryWorkflowStartupFailed'};
+    if (Object.hasOwn(conclusions, run.conclusion)) return conclusions[run.conclusion];
+    const statuses = {queued: 'stateQueued', in_progress: 'stateInProgress', waiting: 'stateWaiting',
+      pending: 'stateWaiting', requested: 'stateRequested'};
+    return Object.hasOwn(statuses, run.status) ? statuses[run.status] : 'deliveryWorkflowUnknown';
+  }
+  function deliveryTaskKey(status) {
+    const keys = {running: 'deliveryResultRunning', completed: 'deliveryResultCompleted',
+      failed: 'deliveryResultFailed', needs_attention: 'deliveryNeedsAttention'};
+    return Object.hasOwn(keys, status) ? keys[status] : 'deliveryUnknown';
+  }
+  function renderDeliveryRuns(report) {
+    const body = $('delivery-runs-body');
+    body.replaceChildren();
+    if (!report.runs.length) {
+      deliveryEmptyRow(body, 7, report.runs_unavailable ? 'deliveryRunsUnavailable' : 'deliveryNoRuns');
+      return;
     }
+    for (const run of report.runs) {
+      if (!run || typeof run !== 'object' || Array.isArray(run)) continue;
+      const row = document.createElement('tr');
+      const identifier = Number.isSafeInteger(run.id) && run.id > 0 ? String(run.id) : '—';
+      const linkCell = document.createElement('td');
+      const safeURL = identifier !== '—' && run.html_url ===
+        'https://github.com/Rexmiao/levyquant-digest/actions/runs/' + identifier;
+      const link = document.createElement(safeURL ? 'a' : 'span');
+      if (safeURL) { link.href = run.html_url; link.target = '_blank'; link.rel = 'noopener noreferrer'; }
+      link.textContent = t('runLabel', {id: identifier});
+      linkCell.append(link);
+      const modeKeys = {send: 'deliveryModeSend', preview: 'deliveryModePreview',
+        'preview-email': 'deliveryModePreviewEmail', 'smtp-test': 'deliveryModeSmtpTest'};
+      const modeCell = document.createElement('td');
+      modeCell.append(deliveryBadge(Object.hasOwn(modeKeys, run.mode) ? modeKeys[run.mode] : 'deliveryModeUnknown'));
+      const countsCell = document.createElement('td');
+      const counts = run.counts;
+      if (!counts || typeof counts !== 'object' || Array.isArray(counts) ||
+        !DELIVERY_COUNT_FIELDS.some(([key]) => deliveryCount(counts[key]) !== '—')) {
+        countsCell.textContent = '—';
+      } else {
+        const details = document.createElement('details');
+        details.className = 'delivery-count-details';
+        const summary = document.createElement('summary');
+        summary.textContent = t('deliveryCounts');
+        const list = document.createElement('dl');
+        for (const [key, label] of DELIVERY_COUNT_FIELDS) {
+          const name = document.createElement('dt'); name.textContent = t(label);
+          const count = document.createElement('dd'); count.textContent = deliveryCount(counts[key]);
+          list.append(name, count);
+        }
+        details.append(summary, list); countsCell.append(details);
+      }
+      const diagnostics = [];
+      if (DELIVERY_ERROR_TYPES.has(run.error_type)) diagnostics.push(run.error_type);
+      if (DELIVERY_ERROR_CODES.has(run.error_code)) diagnostics.push(run.error_code);
+      row.append(deliveryCell(deliveryDate(run.date)), linkCell, modeCell,
+        deliveryCell(t(deliveryWorkflowKey(run)), 'delivery-result-cell'),
+        deliveryCell(t(deliveryTaskKey(run.result_status)), 'delivery-result-cell'), countsCell,
+        deliveryCell(diagnostics.length ? diagnostics.join(' / ') : '—', 'delivery-diagnostic'));
+      body.append(row);
+    }
+  }
+  function renderDeliveryReport() {
+    const body = $('delivery-editions-body');
+    if (!body) return;
+    const runsBody = $('delivery-runs-body');
+    body.replaceChildren(); runsBody.replaceChildren();
+    const state = view.deliveryReportState;
+    const busy = state === 'loading';
+    for (const id of ['delivery-report-panel', 'delivery-runs-panel']) $(id).setAttribute('aria-busy', String(busy));
+    const reportStatus = $('delivery-report-status');
+    const runsStatus = $('delivery-runs-status');
+    reportStatus.textContent = '';
+    runsStatus.textContent = '';
+    reportStatus.classList.toggle('error', state === 'unavailable');
+    runsStatus.classList.toggle('warning', false);
+    if (!adminToken || state === 'idle') return;
+    if (busy || state === 'unavailable') {
+      const key = busy ? 'deliveryLoading' : 'deliveryUnavailable';
+      reportStatus.textContent = t(key);
+      deliveryEmptyRow(body, 11, key); deliveryEmptyRow(runsBody, 7, key);
+      return;
+    }
+    const report = view.deliveryReport;
+    if (!report) return;
+    if (report.runs_unavailable) {
+      runsStatus.textContent = t('deliveryRunsUnavailable');
+      runsStatus.classList.toggle('warning', true);
+    }
+    if (!report.editions.length) deliveryEmptyRow(body, 11, 'deliveryNoEditions');
+    for (const edition of report.editions) {
+      if (!edition || typeof edition !== 'object' || edition.mode !== 'send') continue;
+      const row = document.createElement('tr');
+      const stateCell = document.createElement('td');
+      stateCell.className = 'delivery-edition-state';
+      stateCell.append(deliveryBadge(edition.status === 'completed' ? 'deliveryEditionCompleted' : deliveryTaskKey(edition.status)));
+      if (edition.legacy_counts === true) {
+        const legacy = document.createElement('span');
+        legacy.className = 'delivery-legacy-note';
+        legacy.textContent = t('deliveryLegacyCounts'); stateCell.append(legacy);
+      }
+      row.append(deliveryCell(deliveryDate(edition.date)), stateCell);
+      for (const [key] of DELIVERY_COUNT_FIELDS) {
+        const cell = deliveryCell(deliveryCount(edition[key]), 'delivery-number');
+        if (key === 'internal_count') cell.classList.add('delivery-internal-count');
+        row.append(cell);
+      }
+      body.append(row);
+    }
+    renderDeliveryRuns(report);
+  }
+  function deliveryReportResponse(value) {
+    if (!value || !Array.isArray(value.editions) || !Array.isArray(value.runs) || value.window_days !== 7 ||
+      value.editions.length > 7 || value.runs.length > 50 || typeof value.runs_unavailable !== 'boolean' ||
+      value.editions.some(edition => !edition || typeof edition !== 'object' || Array.isArray(edition) || edition.mode !== 'send') ||
+      value.runs.some(run => !run || typeof run !== 'object' || Array.isArray(run))) {
+      throw errorFor('deliveryUnavailable');
+    }
+    return value;
+  }
+  async function loadDeliveryReport() {
+    if (!adminToken) return;
+    const generation = adminGeneration;
+    const sequence = ++deliveryLoadSequence;
+    view.deliveryReport = null;
+    view.deliveryReportState = 'loading';
+    renderDeliveryReport();
+    try {
+      const report = deliveryReportResponse(await api('/api/admin/delivery-report', {admin: true}));
+      if (generation !== adminGeneration || sequence !== deliveryLoadSequence) return;
+      view.deliveryReport = report;
+      view.deliveryReportState = 'loaded';
+    } catch (error) {
+      if (error.stale || generation !== adminGeneration || sequence !== deliveryLoadSequence) return;
+      view.deliveryReport = null;
+      view.deliveryReportState = 'unavailable';
+    }
+    renderDeliveryReport();
   }
   function renderAdminStatus() {
     const status = view.adminStatus;
@@ -907,7 +1132,10 @@
     view.adminStatus = status;
     view.runs = Array.isArray(status.runs) ? status.runs : [];
     view.runsUnavailable = !!status.runs_error;
-    renderRuns(); renderAdminStatus();
+    renderAdminStatus();
+    // Report failures stay local to the dashboard and cannot turn a successful
+    // authentication or another management action into a failed request.
+    loadDeliveryReport();
     try {
       const list = await api('/api/admin/subscribers', {admin: true});
       view.subscribers = Array.isArray(list.subscribers) ? list.subscribers : [];

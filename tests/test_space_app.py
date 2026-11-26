@@ -1,6 +1,7 @@
 """Offline web-boundary tests: no provider, GitHub or mail connection."""
 from contextlib import redirect_stderr, redirect_stdout
 from copy import deepcopy
+from datetime import datetime, timezone
 import http.client
 from io import StringIO
 import json
@@ -12,6 +13,7 @@ import unittest
 from unittest.mock import Mock, patch
 
 from levyquant import daily, space_app
+from levyquant.delivery_reports import record_run_report
 from levyquant.editor import EditorError, EditorValidationError
 from levyquant.source_settings import SETTINGS_PATH
 from levyquant.state_store import LocalStateStore, StateConflict, StateError
@@ -103,7 +105,8 @@ class AppTests(unittest.TestCase):
                 ("POST", "/api/admin/subscribers"),
                 ("GET", "/api/admin/moomoo-settings"), ("POST", "/api/admin/moomoo-settings"),
                 ("GET", "/api/admin/login-emails"), ("POST", "/api/admin/login-emails"),
-                ("POST", "/api/admin/logout")):
+                ("POST", "/api/admin/logout"), ("GET", "/api/admin/delivery-report"),
+                ("POST", "/api/admin/confirmation-status")):
             with self.subTest(path=path):
                 self.assert_error(401, lambda: self.request(method, path, {}, authorization="Bearer wrong"))
         self.store_factory.assert_not_called()
@@ -303,6 +306,67 @@ class AppTests(unittest.TestCase):
         for value in ENV.values():
             if value not in ("true", "https://example.hf.space"):
                 self.assertNotIn(value, json.dumps(result))
+
+    def test_delivery_report_distinguishes_real_receipts_preview_and_unknown_legacy_runs(self):
+        frozen = {**PREVIEW, "edition_id": "levyquant-morning-" + PREVIEW["date"], "mode": "live", "validated": True,
+                  "events": [], "deliveries": {"hash-a": {"status": "accepted"},
+                      "hash-b": {"status": "accepted"}, "hash-c": {"status": "uncertain"}}}
+        frozen["content_sha256"] = daily.edition_fingerprint(frozen)
+        self.store.values["editions/" + PREVIEW["date"] + ".json"] = frozen
+        record_run_report(self.store, {"run_id": "42", "mode": "preview", "date": PREVIEW["date"],
+            "status": "completed", "started_at": "2026-11-26T12:00:00+00:00",
+            "updated_at": "2026-11-26T12:01:00+00:00", "result_code": "preview_ready_no_mail_sent"})
+        self.github.return_value = {"workflow_runs": [
+            {"id": 42, "status": "completed", "conclusion": "success", "display_title": "LevyQuant Daily Digest [send]",
+             "html_url": "https://github.com/Rexmiao/levyquant-digest/actions/runs/42"},
+            {"id": 43, "status": "completed", "conclusion": "success", "display_title": "LevyQuant Daily Digest",
+             "html_url": "https://github.com/Rexmiao/levyquant-digest/actions/runs/43"},
+            {"id": 44, "status": "completed", "conclusion": "failure", "display_title": "LevyQuant Daily Digest [send]",
+             "html_url": "https://github.com/Rexmiao/levyquant-digest/actions/runs/44"},
+            {"id": 45, "status": "completed", "conclusion": "success", "html_url": "https://untrusted.example"}]}
+        class ReportClock(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return datetime(2026, 11, 26, 12, tzinfo=timezone.utc)
+        with patch.object(space_app, "datetime", ReportClock):
+            status, report = self.request("GET", "/api/admin/delivery-report")
+        self.assertEqual(status, 200)
+        self.assertEqual(report["window_days"], 7)
+        self.assertEqual(len(report["editions"]), 1)
+        summary = report["editions"][0]
+        self.assertEqual((summary["accepted"], summary["uncertain"], summary["mode"]), (2, 1, "send"))
+        self.assertIsNone(summary["recipient_count"])
+        self.assertTrue(summary["legacy_counts"])
+        runs = {row["id"]: row for row in report["runs"]}
+        self.assertEqual(set(runs), {42, 43, 44})
+        self.assertEqual(runs[42]["mode"], "preview")
+        self.assertIsNone(runs[42]["counts"])
+        self.assertIsNone(runs[43]["mode"])
+        self.assertIsNone(runs[43]["result_status"])
+        self.assertEqual(runs[44]["mode"], "send")
+        self.assertIsNone(runs[44]["counts"])
+        self.assertNotIn("hash-a", json.dumps(report))
+        self.assertNotIn(PREVIEW["html"], json.dumps(report))
+
+    def test_delivery_report_preserves_known_receipts_when_workflow_api_fails(self):
+        self.github.side_effect = space_app.AppError(503, "github_unavailable")
+        status, report = self.request("GET", "/api/admin/delivery-report")
+        self.assertEqual(status, 200)
+        self.assertTrue(report["runs_unavailable"])
+        self.assertEqual(report["editions"], [])
+        self.assertEqual(report["runs"], [])
+        self.store.save.assert_not_called()
+
+    def test_confirmation_delivery_diagnostic_is_private_read_only_and_never_resends(self):
+        metadata = {"subscriber_status": "pending", "mail_status": "accepted", "requested_at": None,
+                    "expires_at": None, "reserved_at": None, "completed_at": None, "smtp_code": 250, "stage": None}
+        self.service.confirmation_delivery_status.return_value = metadata
+        self.assertEqual(self.request("POST", "/api/admin/confirmation-status", {"email": "Reader@example.org"}),
+                         (200, metadata))
+        self.service.confirmation_delivery_status.assert_called_once_with("reader@example.org")
+        self.service.request_signup.assert_not_called()
+        self.github.assert_not_called()
+        self.assert_error(400, lambda: self.request("POST", "/api/admin/confirmation-status", {"email": "bad"}))
 
     def test_moomoo_defaults_and_saved_keywords_are_shared_across_app_instances(self):
         _, defaults = self.request("GET", "/api/admin/moomoo-settings")
@@ -545,6 +609,46 @@ class HttpBoundaryTests(unittest.TestCase):
         self.assertEqual(captured_out.getvalue() + captured_err.getvalue(), "")
         self.service.confirm.assert_not_called()
         self.service.unsubscribe.assert_not_called()
+
+    def test_one_click_accepts_receiver_urlencoded_and_multipart_posts_without_login(self):
+        self.service.one_click_unsubscribe.return_value = {"status": "unsubscribed"}
+        path = "/one-click-unsubscribe?id=" + "i" * 24 + "&token=" + "t" * 43
+        status, _, body = self.request("POST", path, "List-Unsubscribe=One-Click",
+                                     {"Content-Type": "application/x-www-form-urlencoded"})
+        self.assertEqual((status, json.loads(body)), (200, {"status": "unsubscribed"}))
+        boundary = "----ReceiverBoundary123"
+        multipart = ("--" + boundary + '\r\nContent-Disposition: form-data; name="List-Unsubscribe"\r\n\r\n'
+                     + "One-Click\r\n--" + boundary + "--\r\n")
+        status, _, body = self.request("POST", path, multipart,
+                                     {"Content-Type": "multipart/form-data; boundary=" + boundary})
+        self.assertEqual((status, json.loads(body)), (200, {"status": "unsubscribed"}))
+        self.assertEqual(self.service.one_click_unsubscribe.call_count, 2)
+        self.service.one_click_unsubscribe.assert_called_with("i" * 24, "t" * 43)
+
+    def test_one_click_scanners_invalid_bodies_and_duplicate_parameters_cannot_unsubscribe(self):
+        path = "/one-click-unsubscribe?id=" + "i" * 24 + "&token=" + "t" * 43
+        captured = StringIO()
+        with redirect_stdout(captured), redirect_stderr(captured):
+            self.assertEqual(self.request("GET", path)[0], 405)
+            cases = [(path, "List-Unsubscribe=Other", "application/x-www-form-urlencoded", 400),
+                     (path, "List-Unsubscribe=One-Click&extra=field", "application/x-www-form-urlencoded", 400),
+                     (path, "List-Unsubscribe=One-Click&List-Unsubscribe=One-Click", "application/x-www-form-urlencoded", 400),
+                     (path, "{}", "application/json", 415),
+                     (path, "x" * 4097, "application/x-www-form-urlencoded", 413),
+                     (path + "&id=" + "i" * 24, "List-Unsubscribe=One-Click", "application/x-www-form-urlencoded", 400),
+                     ("/one-click-unsubscribe?id=" + "i" * 24, "List-Unsubscribe=One-Click", "application/x-www-form-urlencoded", 400)]
+            for url, data, content_type, expected in cases:
+                self.assertEqual(self.request("POST", url, data, {"Content-Type": content_type})[0], expected)
+        self.assertEqual(captured.getvalue(), "")
+        self.service.one_click_unsubscribe.assert_not_called()
+        self.app._subscription_factory.assert_not_called()
+
+    def test_invalid_signed_one_click_link_does_not_report_success(self):
+        self.service.one_click_unsubscribe.return_value = {"status": "invalid"}
+        path = "/one-click-unsubscribe?id=" + "i" * 24 + "&token=" + "t" * 43
+        status, _, body = self.request("POST", path, "List-Unsubscribe=One-Click",
+                                     {"Content-Type": "application/x-www-form-urlencoded"})
+        self.assertEqual((status, json.loads(body)), (400, {"error": "invalid_unsubscribe_link"}))
 
     def test_private_api_denied_and_errors_never_include_state_error_text(self):
         status, _, body = self.request("GET", "/api/admin/subscribers")

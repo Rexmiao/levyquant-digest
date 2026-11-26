@@ -45,6 +45,8 @@ class SMTPDeliveryTests(unittest.TestCase):
         self.assertEqual(parsed["To"].addresses[0].addr_spec, self.recipient)
         self.assertIsNone(parsed["Cc"])
         self.assertIsNone(parsed["Bcc"])
+        self.assertIsNone(parsed["List-Unsubscribe"])
+        self.assertIsNone(parsed["List-Unsubscribe-Post"])
         self.assertEqual(str(parsed["Subject"]), "LevyQuant Daily — 宏观晨报")
         self.assertEqual(parsed.get_content_type(), "multipart/alternative")
         self.assertEqual(parsed.get_body(preferencelist=("plain",)).get_content().strip(), "Markets & 量化研究")
@@ -57,6 +59,40 @@ class SMTPDeliveryTests(unittest.TestCase):
         self.assertNotEqual(self.message["Message-ID"], self.make_message(recipient="another@example.com")["Message-ID"])
         self.assertNotEqual(self.message["Message-ID"], self.make_message(edition_id="2026-11-26-morning")["Message-ID"])
         self.assertNotIn(self.recipient, str(self.message["Message-ID"]))
+
+    def test_one_click_headers_are_valid_literal_ascii_and_do_not_change_the_body(self):
+        url = "https://example-digest.hf.space/one-click-unsubscribe?id=" + "a" * 24 + "&token=" + "b" * 43
+        message = self.make_message(unsubscribe_url=url)
+        wire = message.as_bytes().decode("ascii")
+        self.assertIn("List-Unsubscribe: <" + url + ">\r\n", wire)
+        self.assertIn("List-Unsubscribe-Post: List-Unsubscribe=One-Click\r\n", wire)
+        parsed = BytesParser(policy=policy.default).parsebytes(message.as_bytes())
+        self.assertEqual(str(parsed["List-Unsubscribe"]), "<" + url + ">")
+        baseline = BytesParser(policy=policy.default).parsebytes(self.message.as_bytes())
+        self.assertEqual(parsed.get_body(preferencelist=("plain",)).get_content(),
+                         baseline.get_body(preferencelist=("plain",)).get_content())
+        self.smtp.assert_not_called()
+
+    def test_actual_smtp_data_preserves_literal_one_click_headers(self):
+        url = "https://example-digest.hf.space/one-click-unsubscribe?id=" + "a" * 24 + "&token=" + "b" * 43
+        self.message = self.make_message(unsubscribe_url=url)
+        self.assertEqual(self.send()["status"], "accepted")
+        wire = self.client.data.call_args.args[0].decode("ascii")
+        self.assertIn("List-Unsubscribe: <" + url + ">\r\n", wire)
+        self.assertIn("List-Unsubscribe-Post: List-Unsubscribe=One-Click\r\n", wire)
+        self.assertNotIn("=?", next(line for line in wire.split("\r\n") if line.startswith("List-Unsubscribe:")))
+
+    def test_one_click_header_rejects_foreign_hosts_paths_tokens_and_injection(self):
+        good = "https://example-digest.hf.space/one-click-unsubscribe?id=" + "a" * 24 + "&token=" + "b" * 43
+        for url in (good.replace("https:", "http:"), good.replace("example-digest.hf.space", "outside.example"),
+                    good.replace("example-digest.hf.space", "user:password@example-digest.hf.space"),
+                    good.replace(".hf.space/", ".hf.space:443/"), good.replace("/one-click-unsubscribe", "/unsubscribe"),
+                    good + "#fragment", good + "&id=" + "c" * 24, good + "\r\nBcc: hidden@example.org",
+                    good.replace("b" * 43, "%0d%0aheader")):
+            with self.subTest(url=url), self.assertRaises(delivery.DeliveryError) as captured:
+                self.make_message(unsubscribe_url=url)
+            self.assertEqual(captured.exception.stage, "validation")
+        self.smtp.assert_not_called()
 
     def test_header_injection_rejected_before_connecting(self):
         for change in (

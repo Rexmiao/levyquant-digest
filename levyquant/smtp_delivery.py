@@ -15,6 +15,7 @@ import hashlib
 import re
 import smtplib
 import ssl
+from urllib.parse import parse_qs, urlsplit
 
 
 SMTP_HOST = "smtp.gmail.com"
@@ -101,6 +102,7 @@ def prepare_message(
     sender: str,
     recipient: str,
     edition_id: str,
+    *, unsubscribe_url: str | None = None,
 ) -> EmailMessage:
     """Build one UTF-8 email; sender and recipient are bare email addresses.
 
@@ -123,10 +125,38 @@ def prepare_message(
     message["Date"] = formatdate(localtime=False)
     message["Message-ID"] = _message_id(edition_id, recipient, sender)
     message["X-LevyQuant-Edition"] = edition_id
+    if unsubscribe_url is not None:
+        unsubscribe_url = _one_click_url(unsubscribe_url)
+        message["List-Unsubscribe"] = "<" + unsubscribe_url + ">"
+        message["List-Unsubscribe-Post"] = "List-Unsubscribe=One-Click"
     # Keep the wire data 7-bit clean even when the original titles are Chinese.
     message.set_content(text, charset="utf-8", cte="quoted-printable")
     message.add_alternative(html, subtype="html", charset="utf-8", cte="quoted-printable")
+    if unsubscribe_url is not None:
+        # Keep the ASCII URL literal rather than RFC 2047 encoded words. Body
+        # transfer encoding was already generated with ordinary SMTP policy.
+        message.policy = policy.SMTP.clone(max_line_length=998)
     return message
+
+
+def _one_click_url(value: str) -> str:
+    value = _header(value, "Unsubscribe URL")
+    try:
+        parsed = urlsplit(value)
+        parameters = parse_qs(parsed.query, keep_blank_values=True, strict_parsing=True)
+        valid = (len(value) <= 500 and parsed.scheme == "https" and parsed.username is None and parsed.password is None
+                 and parsed.port is None and parsed.netloc == parsed.hostname
+                 and re.fullmatch(r"[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.hf\.space", parsed.hostname or "")
+                 and parsed.path == "/one-click-unsubscribe" and not parsed.fragment
+                 and set(parameters) == {"id", "token"}
+                 and len(parameters["id"]) == len(parameters["token"]) == 1
+                 and re.fullmatch(r"[A-Za-z0-9_-]{24}", parameters["id"][0])
+                 and re.fullmatch(r"[A-Za-z0-9_-]{43}", parameters["token"][0]))
+    except (ValueError, TypeError):
+        valid = False
+    if not valid:
+        raise DeliveryError("A valid fixed-site one-click unsubscribe URL is required.", stage="validation")
+    return value
 
 
 def _single_address(message: EmailMessage, field: str) -> str:
@@ -160,7 +190,8 @@ def _envelope(message: EmailMessage, username: str) -> tuple[str, str, str, byte
     message_id = str(message["Message-ID"])
     if message_id != _message_id(edition_id, recipient, sender):
         raise DeliveryError("Message-ID does not match the edition and recipient.", stage="validation")
-    return sender, recipient, message_id, message.as_bytes(policy=policy.SMTP)
+    wire_policy = policy.SMTP.clone(max_line_length=998) if message.get("List-Unsubscribe") is not None else policy.SMTP
+    return sender, recipient, message_id, message.as_bytes(policy=wire_policy)
 
 
 def send_one(message: EmailMessage, *, username: str, password: str) -> dict:

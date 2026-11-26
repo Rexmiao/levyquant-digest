@@ -14,6 +14,7 @@ import sys
 from zoneinfo import ZoneInfo
 
 from .editor import EditorError, editor_to_digest, generate_editor
+from .delivery_reports import COUNT_FIELDS, ERROR_TYPES, RESULT_CODES, record_run_report, summarize_edition
 from .feeds import DIAGNOSTIC_STATUSES, collect_sources
 from .render import render_digest
 from .smtp_delivery import DeliveryError, DeliveryUncertain, prepare_message, send_one
@@ -23,7 +24,7 @@ from .source_settings import (
 )
 from .state_store import GitHubStateStore, LocalStateStore, StateError
 from .state_store import StateConflict
-from .subscriptions import SubscriptionService, validate_public_base_url
+from .subscriptions import REPOSITORY, SubscriptionService, validate_public_base_url
 
 ROOT = Path(__file__).resolve().parent.parent
 FREE_MODEL = "gemini-3.5-flash-lite"
@@ -109,8 +110,7 @@ def preflight(config: dict, mode: str, environment: dict) -> list[str]:
             internal = recipients_from(environment.get("DIGEST_INTERNAL_RECIPIENTS", ""))
         except ConfigurationError:
             raise ConfigurationError("DIGEST_INTERNAL_RECIPIENTS secret is missing or invalid") from None
-        if environment.get("SUBSCRIPTIONS_ENABLED", "").lower() == "true":
-            validate_public_base_url(environment.get("DIGEST_PUBLIC_BASE_URL", ""))
+        validate_public_base_url(environment.get("DIGEST_PUBLIC_BASE_URL", ""))
         # Both groups are required. Reuse the same parser to deduplicate across
         # groups and apply its 100-recipient limit to the final combined list.
         return recipients_from(json.dumps(subscribers + internal))
@@ -244,7 +244,7 @@ def claim_run_date(store, environment: dict, date: str, now: datetime) -> None:
 def deliver_edition(store, path: str, edition: dict, recipients: list[str], *, sender: str,
                     password: str, execution_id: str, transport=None, subscription_service=None,
                     internal_recipients: list[str] | None = None) -> dict:
-    """Persist a claim before each attempt; do not replay ambiguous results."""
+    """Reserve, recheck opt-outs, then submit once; preserve ambiguous outcomes."""
     if edition.get("mode") != "live" or edition.get("validated") is not True:
         raise ConfigurationError("Only a validated live edition may be delivered")
     current_date = datetime.now(timezone.utc).astimezone(ZoneInfo("America/New_York")).date().isoformat()
@@ -253,60 +253,99 @@ def deliver_edition(store, path: str, edition: dict, recipients: list[str], *, s
         raise ConfigurationError("Delivery state path does not match the current edition")
     transport = transport or send_one
     recipients = recipients_from(json.dumps(recipients))
-    internal_keys = {address.casefold() for address in recipients_from(json.dumps(internal_recipients))} if internal_recipients else set()
-    # Validate every envelope before a reservation or SMTP connection is made.
-    messages = []
-    for address in recipients:
-        html_body, text_body = edition["html"], edition["text"]
-        if subscription_service is not None and address.casefold() not in internal_keys:
-            url = subscription_service.unsubscribe_url(address)
-            footer = ('<hr><p style="font-size:12px;color:#5f6368;">'
-                      '<a href="' + escape(url, quote=True) + '">Manage or unsubscribe from the mailing list</a></p>')
-            closing = html_body.lower().rfind("</body>")
-            html_body = html_body[:closing] + footer + html_body[closing:] if closing >= 0 else html_body + footer
-            text_body += "\n\nManage or unsubscribe from the mailing list:\n" + url + "\n"
-        messages.append((address, prepare_message(edition["subject"], html_body, text_body,
-                                                 sender, address, edition["edition_id"])))
+    internal = recipients_from(json.dumps(internal_recipients)) if internal_recipients else []
+    internal_keys = {address.casefold() for address in internal}
     delivery = edition.setdefault("deliveries", {})
-    blocked = 0
-    for address, message in messages:
+    known_statuses = {"accepted", "rejected", "uncertain", "reserved", "skipped_unsubscribed"}
+    if any(not isinstance(row, dict) or row.get("status") not in known_statuses for row in delivery.values()):
+        raise ConfigurationError("Stored delivery status is unsupported; further submissions are blocked")
+    planned = set(delivery) | {recipient_key(address) for address in recipients}
+    if len(planned) > 100:
+        raise ConfigurationError("More than 100 edition recipients requires a reviewed mailing setup")
+    internal_hashes = {recipient_key(address) for address in internal}
+    already_accepted = sum(row.get("status") == "accepted" for row in delivery.values())
+    # Check all envelopes before any attempt; personalized headers are added
+    # only for recipients still eligible in the loop below.
+    messages = {address: prepare_message(edition["subject"], edition["html"], edition["text"],
+                sender, address, edition["edition_id"]) for address in recipients}
+
+    def persist():
+        counts = {status: sum(delivery.get(key, {}).get("status") == status for key in planned)
+                  for status in ("accepted", "rejected", "uncertain", "reserved", "skipped_unsubscribed")}
+        counts.update(recipient_count=len(planned), pending=sum(key not in delivery for key in planned),
+                      internal_count=len(planned & internal_hashes), already_accepted=already_accepted)
+        edition["delivery_summary"] = counts
+        store.save(path, edition)
+
+    def allowed(address):
+        if address.casefold() in internal_keys or subscription_service is None:
+            return True
+        result = subscription_service.is_delivery_allowed(address, internal)
+        if type(result) is not bool:
+            raise StateError("Delivery eligibility could not be verified")
+        return result
+
+    def skip(key):
+        delivery[key] = {"status": "skipped_unsubscribed", "reason": "subscription_not_allowed",
+                         "execution_id": execution_id, "skipped_at": datetime.now(timezone.utc).isoformat()}
+        persist()
+
+    persist()
+    for address in recipients:
         if datetime.now(timezone.utc).astimezone(ZoneInfo("America/New_York")).date().isoformat() != current_date:
             raise ConfigurationError("The New York edition date changed during delivery; further submissions are blocked")
         key = recipient_key(address)
         previous = delivery.get(key, {})
         if previous.get("status") == "accepted":
             continue
-        if previous and not (previous.get("status") == "rejected" and previous.get("retry_safe") is True):
-            blocked += 1
+        if previous.get("status") == "skipped_unsubscribed" and address.casefold() not in internal_keys:
             continue
+        if previous.get("status") in ("reserved", "uncertain"):
+            continue
+        if not allowed(address):
+            skip(key)
+            continue
+        if previous.get("status") == "rejected" and previous.get("retry_safe") is not True:
+            continue
+        message = messages[address]
+        if subscription_service is not None and address.casefold() not in internal_keys:
+            url = subscription_service.unsubscribe_url(address)
+            one_click = subscription_service.one_click_unsubscribe_url(address)
+            footer = ('<hr><p style="font-size:12px;color:#5f6368;">'
+                      '<a href="' + escape(url, quote=True) + '">Manage or unsubscribe from the mailing list</a></p>')
+            html_body, text_body = edition["html"], edition["text"]
+            closing = html_body.lower().rfind("</body>")
+            html_body = html_body[:closing] + footer + html_body[closing:] if closing >= 0 else html_body + footer
+            text_body += "\n\nManage or unsubscribe from the mailing list:\n" + url + "\n"
+            message = prepare_message(edition["subject"], html_body, text_body, sender, address,
+                                      edition["edition_id"], unsubscribe_url=one_click)
         reservation = {"status": "reserved", "execution_id": execution_id,
                        "message_id": message["Message-ID"],
                        "reserved_at": datetime.now(timezone.utc).isoformat()}
         delivery[key] = reservation
-        store.save(path, edition)  # A failed acknowledgement stops before SMTP.
+        persist()  # A failed acknowledgement stops before SMTP.
+        if not allowed(address):
+            skip(key)
+            continue
         try:
             receipt = transport(message, username=sender, password=password)
         except DeliveryUncertain as error:
             reservation.update({"status": "uncertain", "stage": error.stage, "smtp_code": error.smtp_code})
-            store.save(path, edition)
-            blocked += 1
+            persist()
         except DeliveryError as error:
             reservation.update({"status": "rejected", "retry_safe": error.retry_safe is True,
                                 "stage": error.stage, "smtp_code": error.smtp_code})
-            store.save(path, edition)
-            blocked += 1
+            persist()
         else:
             if not isinstance(receipt, dict) or receipt.get("status") != "accepted":
                 reservation["status"] = "uncertain"
-                blocked += 1
             else:
                 reservation.update({"status": "accepted", "accepted_at": datetime.now(timezone.utc).isoformat(),
                                     "smtp_code": receipt.get("smtp_code")})
-            store.save(path, edition)
-    result = {"recipient_count": len(recipients),
-              "accepted": sum(delivery.get(recipient_key(a), {}).get("status") == "accepted" for a in recipients),
-              "blocked_or_failed": blocked}
-    return result
+            persist()
+    persist()
+    summary = edition["delivery_summary"]
+    return {**summary, "blocked_or_failed": sum(summary[key] for key in ("rejected", "uncertain", "reserved", "pending"))}
 
 
 def publish_latest(store, edition: dict) -> None:
@@ -346,12 +385,14 @@ def run(config: dict, mode: str, environment: dict, output: Path, *, moomoo_sett
                                  encryption_key=environment["STATE_ENCRYPTION_KEY"])
         store.ensure_state_branch()
         claim_run_date(store, environment, date, now)
-        if environment.get("SUBSCRIPTIONS_ENABLED", "").lower() == "true":
-            subscription_service = SubscriptionService(store, environment["STATE_ENCRYPTION_KEY"],
-                                                       environment["DIGEST_PUBLIC_BASE_URL"], now=now)
-            recipients = subscription_service.delivery_recipients(
-                recipients_from(environment["DIGEST_RECIPIENTS"]),
-                recipients_from(environment["DIGEST_INTERNAL_RECIPIENTS"]))
+        subscription_service = SubscriptionService(store, environment["STATE_ENCRYPTION_KEY"],
+                                                   environment["DIGEST_PUBLIC_BASE_URL"], now=now)
+        subscribers = recipients_from(environment["DIGEST_RECIPIENTS"])
+        internal = recipients_from(environment["DIGEST_INTERNAL_RECIPIENTS"])
+        eligible = subscription_service.delivery_recipients(subscribers, internal,
+            include_public_subscribers=environment.get("SUBSCRIPTIONS_ENABLED", "").lower() == "true")
+        # Retain legacy opt-outs as planned skips for an honest edition audit.
+        recipients = recipients_from(json.dumps(internal + subscribers + eligible))
     else:
         store = LocalStateStore(output / "preview-state")
     edition_path = "editions/" + date + ".json"
@@ -478,7 +519,7 @@ def run(config: dict, mode: str, environment: dict, output: Path, *, moomoo_sett
         current.update({item["id"]: item for item in edition["events"]})
         history["events"] = list(current.values())[-1000:]
         store.save("history.json", history)
-    status = "all_submissions_accepted" if receipt["accepted"] == len(recipients) else "delivery_needs_attention"
+    status = "all_submissions_accepted" if receipt["blocked_or_failed"] == 0 else "delivery_needs_attention"
     return {"mode": mode, "status": status, "date": date, **receipt}
 
 
@@ -489,8 +530,33 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--output", type=Path, default=ROOT / "outputs")
     args = parser.parse_args(argv)
     args.output.mkdir(parents=True, exist_ok=True)
+    environment = dict(os.environ)
+    report_store, report = None, None
     try:
-        result = run(read_json(args.config), args.mode, dict(os.environ), args.output)
+        config = read_json(args.config)
+        reporting = (environment.get("GITHUB_ACTIONS", "").lower() == "true"
+                     and environment.get("GITHUB_REPOSITORY") == REPOSITORY
+                     and isinstance(environment.get("GITHUB_RUN_ID"), str)
+                     and re.fullmatch(r"[0-9]{1,32}", environment["GITHUB_RUN_ID"])
+                     and all(environment.get(key) for key in ("GITHUB_TOKEN", "STATE_ENCRYPTION_KEY")))
+        if reporting:
+            checked = {**config, "sender": environment.get("SMTP_USERNAME") or config.get("sender")}
+            preflight(checked, args.mode, environment)  # No remote reads for invalid configuration.
+            started = datetime.now(timezone.utc)
+            report = {"run_id": environment["GITHUB_RUN_ID"], "mode": args.mode,
+                      "date": started.astimezone(ZoneInfo("America/New_York")).date().isoformat(),
+                      "started_at": started.isoformat(), "updated_at": started.isoformat(),
+                      "status": "running", "result_code": "running"}
+            try:
+                report_store = GitHubStateStore(REPOSITORY, environment["GITHUB_TOKEN"],
+                                                encryption_key=environment["STATE_ENCRYPTION_KEY"])
+                report_store.ensure_state_branch()
+                record_run_report(report_store, report)
+            except Exception:
+                # Activity reporting is independent of the single delivery
+                # attempt and cannot trigger a second SMTP submission.
+                pass
+        result = run(config, args.mode, environment, args.output)
     except Exception as error:
         # Controlled module errors are scrubbed; avoid repr/tracebacks containing
         # request objects, HTTP headers, provider bodies or recipient addresses.
@@ -504,6 +570,28 @@ def main(argv: list[str] | None = None) -> int:
         message = re.sub(r"https?://\S+", "[URL omitted]", message)
         message = " ".join(message.split())[:500]
         result = {"mode": args.mode, "status": "failed", "error_type": type(error).__name__, "message": message}
+    if report is not None:
+        result["run_report_status"] = "unavailable"
+        if report_store is not None:
+            final = {**report, "updated_at": datetime.now(timezone.utc).isoformat(),
+                     "status": "failed" if result["status"] in ("failed", "delivery_needs_attention") else "completed",
+                     "result_code": result["status"] if result["status"] in RESULT_CODES else "completed"}
+            final.update({key: result[key] for key in COUNT_FIELDS if type(result.get(key)) is int})
+            if result["status"] == "failed":
+                final.update(error_type=result.get("error_type") if result.get("error_type") in ERROR_TYPES else "Exception",
+                             error_code="execution_failed", result_code="failed")
+                if args.mode == "send":
+                    try:
+                        frozen = report_store.load("editions/" + report["date"] + ".json")
+                        counts = summarize_edition(frozen)
+                        final.update({key: counts[key] for key in COUNT_FIELDS if type(counts.get(key)) is int})
+                    except Exception:
+                        pass
+            try:
+                record_run_report(report_store, final)
+                result["run_report_status"] = "recorded"
+            except Exception:
+                pass
     (args.output / "run-summary.json").write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
     lines = ["# LevyQuant daily digest", "", *[f"- {key}: {value}" for key, value in result.items()]]
     (args.output / "run-summary.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
