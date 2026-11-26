@@ -1,0 +1,10 @@
+.env
+.env.*
+__pycache__/
+*.py[cod]
+outputs/
+state/
+.venv/
+credentials/
+subscribers.local.json
+config.local.json
