@@ -152,23 +152,6 @@ def render_digest(digest: dict, articles: list[dict]) -> tuple[str, str]:
         text_parts.append(subtitle)
     text_parts.extend([f'{labels["cutoff"]}: {cutoff}', ""])
 
-    warnings = digest.get("coverage_warnings", [])
-    if not isinstance(warnings, list):
-        warnings = [warnings] if warnings else []
-    warnings = [_text(warning) for warning in warnings if _text(warning)]
-    if warnings:
-        html_parts.append(
-            '<tr><td style="padding:12px 14px;background-color:#fff8e1;'
-            'border-left:4px solid #b06000;color:#704300;font-size:13px;line-height:1.6;">'
-            f'<strong>{_html(labels["coverage"])}</strong>'
-        )
-        text_parts.append(f'!!! {labels["coverage"]} !!!')
-        for warning in warnings:
-            html_parts.append(f'<div style="margin-top:4px;">{_html(warning)}</div>')
-            text_parts.append(f"- {warning}")
-        html_parts.append('</td></tr>')
-        text_parts.append("")
-
     linked_ids = set()
     item_count = 0
     for section in _records(digest.get("sections", [])):
@@ -236,9 +219,25 @@ def render_digest(digest: dict, articles: list[dict]) -> tuple[str, str]:
     if not item_count:
         html_parts.append(f'<tr><td style="padding:20px 0;font-size:14px;">{_html(labels["empty"])}</td></tr>')
         text_parts.extend([labels["empty"], ""])
+    warnings = digest.get("coverage_warnings", [])
+    if not isinstance(warnings, list):
+        warnings = [warnings] if warnings else []
+    warnings = [_text(warning) for warning in warnings if _text(warning)]
+    if warnings:
+        html_parts.append(
+            '<tr data-digest-block="coverage"><td style="padding:16px 0 12px;'
+            'border-top:1px solid #e5e7eb;color:#6b7280;font-size:11px;line-height:1.55;">'
+            f'<strong style="font-size:11px;font-weight:600;">{_html(labels["coverage"])}</strong>'
+        )
+        text_parts.append(labels["coverage"])
+        for warning in warnings:
+            html_parts.append(f'<div style="margin-top:4px;">{_html(warning)}</div>')
+            text_parts.append(f"- {warning}")
+        html_parts.append('</td></tr>')
+        text_parts.append("")
     footer = f'LevyQuant Daily · {labels["source_count"]}: {len(linked_ids)}'
     html_parts.append(
-        '<tr><td style="padding:16px 0 0;border-top:1px solid #dadce0;'
+        '<tr data-digest-block="footer"><td style="padding:16px 0 0;border-top:1px solid #dadce0;'
         f'color:#70757a;font-size:12px;line-height:1.5;">{_html(footer)}</td></tr>'
         '</table></td></tr></table></body></html>'
     )

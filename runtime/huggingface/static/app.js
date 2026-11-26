@@ -34,7 +34,30 @@
   function showPreview(frameId, preview) {
     const frame = $(frameId);
     if (typeof preview?.html !== 'string' || !preview.html) return false;
-    frame.srcdoc = preview.html;
+    const parsed = new DOMParser().parseFromString(preview.html, 'text/html');
+    let coverage = parsed.querySelector('[data-digest-block="coverage"]')?.closest('tr');
+    if (!coverage) {
+      const heading = Array.from(parsed.querySelectorAll('td > strong')).find(node =>
+        ['Coverage notice', '资料覆盖提醒'].includes(node.textContent.trim()));
+      coverage = heading?.closest('tr');
+    }
+    const parent = coverage?.parentElement;
+    if (parent?.tagName === 'TBODY') {
+      const footer = Array.from(parent.children).find(row => row.tagName === 'TR' &&
+        (row.matches('[data-digest-block="footer"]') || Array.from(row.children).some(cell =>
+          cell.tagName === 'TD' && (cell.matches('[data-digest-block="footer"]') ||
+            cell.textContent.trim().startsWith('LevyQuant Daily ·')))));
+      if (footer && footer !== coverage && footer.parentElement === parent) {
+        if (coverage.nextElementSibling !== footer) parent.insertBefore(coverage, footer);
+        for (const node of [coverage, ...Array.from(coverage.children).filter(cell => cell.tagName === 'TD')]) {
+          node.style.fontSize = '11px';
+          node.style.color = '#70757a';
+          node.style.backgroundColor = 'transparent';
+          node.style.borderLeft = '0';
+        }
+      }
+    }
+    frame.srcdoc = '<!doctype html>\n' + parsed.documentElement.outerHTML;
     frame.hidden = false;
     return true;
   }
