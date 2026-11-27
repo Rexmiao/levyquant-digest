@@ -87,6 +87,35 @@ class AdminAuthTests(unittest.TestCase):
         self.advance(hours=1)
         self.assertFalse(self.service.authenticate_session(second["token"]))
 
+    def test_recovery_exchange_is_short_lived_hash_only_and_bound_to_current_key(self):
+        credential = "recovery_" + "r" * 40
+        result = self.service.create_recovery_session(credential)
+        token = result["token"]
+        self.assertEqual(self.service.session_details(token, recovery_credential=credential),
+            {"status": "authenticated", "expires_at": (START + SESSION_TTL).isoformat()})
+        self.assertFalse(self.service.authenticate_session(token))
+        self.assertFalse(self.service.authenticate_session(token, recovery_credential="other_" + "s" * 40))
+        self.assertTrue(self.service.authenticate_session(token, recovery_credential=credential))
+        self.assertNotIn(token, json.dumps(self.store.values))
+        self.assertNotIn(credential, json.dumps(self.store.values))
+        # Recovery access is independent of the optional email allowlist.
+        self.service.configure_emails([])
+        self.assertTrue(self.service.authenticate_session(token, recovery_credential=credential))
+        self.advance(hours=1)
+        self.assertIsNone(self.service.session_details(token, recovery_credential=credential))
+
+    def test_recovery_logout_requires_durable_revocation_and_exchange_requires_ack(self):
+        credential = "recovery_" + "r" * 40
+        result = self.service.create_recovery_session(credential)
+        self.store.ignore_state_save = True
+        with self.assertRaises(AdminAuthError):
+            self.service.logout_session(result["token"])
+        with self.assertRaises(AdminAuthError):
+            self.service.create_recovery_session(credential)
+        self.store.ignore_state_save = False
+        self.service.logout_session(result["token"])
+        self.assertFalse(self.service.authenticate_session(result["token"], recovery_credential=credential))
+
     def test_wrong_codes_lock_after_five_and_expiry_cannot_authenticate(self):
         requested = self.request()
         code = self.code_for(requested["challenge_id"])

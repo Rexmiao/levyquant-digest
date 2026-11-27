@@ -5,6 +5,7 @@ from collections import OrderedDict, deque
 from copy import deepcopy
 from datetime import date, datetime, timedelta, timezone
 from email import policy as email_policy
+from email.utils import format_datetime
 from email.parser import BytesParser
 import hashlib
 import hmac
@@ -39,6 +40,8 @@ MAX_GITHUB_BYTES = 256 * 1024
 PUBLIC_PATH = "public/latest.json"
 _WORKFLOWS = frozenset(("daily-digest.yml", "subscription-mail.yml"))
 _FIELDS = ("date", "subject", "html", "text")
+_ADMIN_COOKIE = "__Host-lq_admin"
+_SESSION_TOKEN = re.compile(r"lq_session_[A-Za-z0-9_-]{43}\Z")
 _PUBLIC_MUTATIONS = frozenset(("/api/subscribe", "/api/confirm", "/api/unsubscribe",
                               "/api/admin-login/request", "/api/admin-login/verify"))
 _EDITOR_ISSUE_CODES = frozenset((
@@ -253,7 +256,8 @@ class SpaceApplication:
     def authorize(self, header: str | None) -> None:
         supplied = header[7:] if isinstance(header, str) and header.startswith("Bearer ") else ""
         if re.fullmatch(r"lq_session_[A-Za-z0-9_-]{43}", supplied):
-            if self._new_admin_auth_service().authenticate_session(supplied):
+            if self._new_admin_auth_service().authenticate_session(supplied,
+                    recovery_credential=self.environment.get("SPACE_ADMIN_TOKEN", "")):
                 return
             raise AppError(401, "unauthorized")
         self._authorize_recovery(header)
@@ -650,6 +654,18 @@ class SpaceApplication:
                     or not isinstance(expires, str) or len(expires) > 40):
                 raise AppError(503, "temporarily_unavailable")
             return 200, {"status": "authenticated", "token": token, "expires_at": expires}
+        if path == "/api/admin/session" and method in ("GET", "POST"):
+            service = self._new_admin_auth_service()
+            if method == "POST":
+                _body_fields(body, set())
+                self._authorize_recovery(authorization)
+                return 200, service.create_recovery_session(authorization[7:])
+            token = authorization[7:] if isinstance(authorization, str) else ""
+            result = service.session_details(token,
+                recovery_credential=self.environment.get("SPACE_ADMIN_TOKEN", ""))
+            if result is None:
+                raise AppError(401, "unauthorized")
+            return 200, result
         if method == "POST" and path == "/api/subscribe":
             _body_fields(body, {"email", "website"})
             if not self.signup_enabled():
@@ -807,6 +823,9 @@ class SpaceRequestHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(encoded)))
         self.send_header("Cache-Control", "no-store")
+        cookie = getattr(self, "_response_cookie", None)
+        if cookie:
+            self.send_header("Set-Cookie", cookie)
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("Referrer-Policy", "no-referrer")
         self.send_header("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
@@ -892,6 +911,50 @@ class SpaceRequestHandler(BaseHTTPRequestHandler):
         except (ValueError, TypeError, UnicodeError):
             raise AppError(400, "invalid_request") from None
 
+    def _cookie_token(self):
+        headers = self.headers.get_all("Cookie", [])
+        if sum(len(value) for value in headers) > 8192:
+            raise AppError(400, "invalid_request")
+        values = [part.split("=", 1)[1].strip() for header in headers for part in header.split(";")
+                  if "=" in part and part.split("=", 1)[0].strip() == _ADMIN_COOKIE]
+        if len(values) > 1:
+            raise AppError(401, "unauthorized")
+        return values[0] if values and _SESSION_TOKEN.fullmatch(values[0]) else None
+
+    def _require_same_origin(self):
+        # Only the operator-configured canonical HTTPS origin is trusted;
+        # forwarded Host/Proto and the inbound Host header cannot grant access.
+        try:
+            expected = validate_public_base_url(self.server.application.environment.get("DIGEST_PUBLIC_BASE_URL", ""))
+        except SubscriptionError:
+            raise AppError(503, "not_configured") from None
+        if self.headers.get_all("Origin", []) != [expected]:
+            raise AppError(403, "same_origin_required")
+        fetch_site = self.headers.get("Sec-Fetch-Site")
+        if fetch_site is not None and fetch_site != "same-origin":
+            raise AppError(403, "same_origin_required")
+
+    def _set_session_cookie(self, result):
+        token, expiry = result.get("token"), result.get("expires_at")
+        try:
+            if not isinstance(token, str) or not _SESSION_TOKEN.fullmatch(token) or not isinstance(expiry, str):
+                raise ValueError
+            moment = datetime.fromisoformat(expiry.replace("Z", "+00:00"))
+            if moment.tzinfo is None or moment.utcoffset() != timedelta(0):
+                raise ValueError
+            remaining = min(3600, int((moment - datetime.now(timezone.utc)).total_seconds()))
+            if remaining <= 0:
+                raise ValueError
+        except (ValueError, TypeError, OverflowError):
+            raise AppError(503, "temporarily_unavailable") from None
+        self._response_cookie = (f"{_ADMIN_COOKIE}={token}; Path=/; Secure; HttpOnly; SameSite=Strict; "
+                                 f"Max-Age={remaining}; Expires={format_datetime(moment, usegmt=True)}")
+        return {"status": "authenticated", "expires_at": expiry}
+
+    def _clear_session_cookie(self):
+        self._response_cookie = (f"{_ADMIN_COOKIE}=; Path=/; Secure; HttpOnly; SameSite=Strict; "
+                                 "Max-Age=0; Expires=Thu, 01 Jan 1970 00:00:00 GMT")
+
     def _handle(self):
         try:
             parsed = urlsplit(self.path)
@@ -921,13 +984,26 @@ class SpaceRequestHandler(BaseHTTPRequestHandler):
                 self._respond(status, response)
                 return
             if path.startswith("/api/"):
+                authorization = self.headers.get("Authorization")
+                cookie_token = self._cookie_token() if path.startswith("/api/admin/") else None
+                using_cookie = authorization is None and cookie_token is not None
+                if using_cookie:
+                    authorization = "Bearer " + cookie_token
+                browser_login = self.command == "POST" and path in (
+                    "/api/admin/session", "/api/admin-login/verify")
+                if browser_login or (using_cookie and self.command == "POST"):
+                    self._require_same_origin()
                 # Authenticate before reading a potentially slow admin body.
                 if path.startswith("/api/admin/"):
-                    app.authorize(self.headers.get("Authorization"))
+                    app.authorize(authorization)
                 body = self._json_body() if self.command == "POST" else None
                 client = hashlib.sha256(self.client_address[0].encode("utf-8")).hexdigest()
                 status, response = app.handle_api(self.command, path, body,
-                    authorization=self.headers.get("Authorization"), client_id=client)
+                    authorization=authorization, client_id=client)
+                if browser_login and status == 200:
+                    response = self._set_session_cookie(response)
+                if self.command == "POST" and path == "/api/admin/logout" and status == 200:
+                    self._clear_session_cookie()
                 self._respond(status, response)
                 return
             if self.command != "GET":
@@ -950,6 +1026,8 @@ class SpaceRequestHandler(BaseHTTPRequestHandler):
                 raise AppError(503, "page_unavailable") from None
             self._respond(200, content, content_type)
         except AppError as error:
+            if error.status == 401 and self.path.split("?", 1)[0].startswith("/api/admin/"):
+                self._clear_session_cookie()
             self._respond(error.status, {"error": error.code})
         except SubscriptionError:
             self._respond(400, {"error": "invalid_request"})

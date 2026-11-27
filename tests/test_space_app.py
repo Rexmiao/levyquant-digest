@@ -13,6 +13,7 @@ import unittest
 from unittest.mock import Mock, patch
 
 from levyquant import archive, daily, space_app
+from levyquant.admin_auth import AdminAuthService, STATE_PATH as ADMIN_STATE_PATH
 from levyquant.delivery_reports import record_run_report
 from levyquant.editor import EditorError, EditorValidationError
 from levyquant.source_settings import SETTINGS_PATH
@@ -611,6 +612,97 @@ class HttpBoundaryTests(unittest.TestCase):
             return response.status, dict(response.getheaders()), response.read().decode()
         finally:
             connection.close()
+
+    def persistent_auth(self):
+        self.auth_store = MemoryStore()
+        self.auth_clock = [datetime.now(timezone.utc)]
+        service = AdminAuthService(self.auth_store, ENV["STATE_ENCRYPTION_KEY"], now=lambda: self.auth_clock[0])
+        self.app._admin_auth_factory = lambda: service
+        self.service.list_subscribers.return_value = []
+        return service
+
+    def exchange_cookie(self):
+        status, headers, raw = self.request("POST", "/api/admin/session", "{}", {
+            "Authorization": AUTH, "Content-Type": "application/json", "Origin": ENV["DIGEST_PUBLIC_BASE_URL"]})
+        self.assertEqual(status, 200)
+        result = json.loads(raw)
+        self.assertEqual(set(result), {"status", "expires_at"})
+        self.assertEqual(result["status"], "authenticated")
+        cookie = headers["Set-Cookie"]
+        self.assertIn("Secure; HttpOnly; SameSite=Strict", cookie)
+        self.assertIn("Path=/", cookie)
+        self.assertIn("Max-Age=", cookie)
+        self.assertNotIn(TOKEN, cookie + raw)
+        return cookie.split(";", 1)[0], result
+
+    def test_recovery_login_survives_new_http_requests_until_logout_and_never_exposes_cookie_in_json(self):
+        self.persistent_auth()
+        cookie, expected = self.exchange_cookie()
+        self.assertNotIn(cookie.split("=", 1)[1], json.dumps(self.auth_store.values))
+        for _ in range(2):
+            status, _, raw = self.request("GET", "/api/admin/session", headers={"Cookie": cookie})
+            self.assertEqual((status, json.loads(raw)), (200, expected))
+        self.assertEqual(self.request("GET", "/api/admin/subscribers", headers={"Cookie": cookie})[0], 200)
+        status, headers, raw = self.request("POST", "/api/admin/logout", "{}", {
+            "Cookie": cookie, "Content-Type": "application/json", "Origin": ENV["DIGEST_PUBLIC_BASE_URL"]})
+        self.assertEqual((status, json.loads(raw)), (200, {"status": "signed_out"}))
+        self.assertIn("Max-Age=0", headers["Set-Cookie"])
+        self.assertEqual(self.request("GET", "/api/admin/session", headers={"Cookie": cookie})[0], 401)
+        self.assertEqual(self.auth_store.values[ADMIN_STATE_PATH]["sessions"], [])
+
+    def test_cookie_writes_require_exact_configured_origin_before_authentication_or_reading_body(self):
+        service = self.persistent_auth()
+        cookie, _ = self.exchange_cookie()
+        with patch.object(service, "authenticate_session", wraps=service.authenticate_session) as authenticate:
+            for origin in (None, "null", "https://attacker.hf.space", ENV["DIGEST_PUBLIC_BASE_URL"] + "/",
+                           "http://example.hf.space"):
+                headers = {"Cookie": cookie, "Content-Type": "application/json",
+                    "Host": "attacker.hf.space", "X-Forwarded-Host": "example.hf.space",
+                    "X-Forwarded-Proto": "https"}
+                if origin is not None:
+                    headers["Origin"] = origin
+                self.assertEqual(self.request("POST", "/api/admin/logout", "", headers)[0], 403)
+            authenticate.assert_not_called()
+        # A matching Origin cannot override browser fetch metadata from a sibling site.
+        self.assertEqual(self.request("POST", "/api/admin/logout", "", {
+            "Cookie": cookie, "Content-Type": "application/json", "Origin": ENV["DIGEST_PUBLIC_BASE_URL"],
+            "Sec-Fetch-Site": "same-site"})[0], 403)
+        self.assertEqual(self.request("GET", "/api/admin/session", headers={"Cookie": cookie})[0], 200)
+        # Existing trusted stateless Bearer callers do not need browser headers.
+        self.assertEqual(self.request("POST", "/api/admin/logout", "{}", {
+            "Authorization": AUTH, "Content-Type": "application/json"})[0], 200)
+
+    def test_expired_rotated_or_duplicate_cookie_is_rejected_without_fallback_to_recovery(self):
+        self.persistent_auth()
+        cookie, _ = self.exchange_cookie()
+        self.assertEqual(self.request("GET", "/api/admin/session", headers={"Cookie": cookie + "; " + cookie})[0], 401)
+        self.app.environment["SPACE_ADMIN_TOKEN"] = "rotated_" + "z" * 40
+        self.assertEqual(self.request("GET", "/api/admin/session", headers={"Cookie": cookie})[0], 401)
+        self.app.environment["SPACE_ADMIN_TOKEN"] = TOKEN
+        self.auth_clock[0] += timedelta(hours=1)
+        status, headers, _ = self.request("GET", "/api/admin/session", headers={"Cookie": cookie})
+        self.assertEqual(status, 401)
+        self.assertIn("Max-Age=0", headers["Set-Cookie"])
+        self.assertEqual(self.request("GET", "/api/admin/session", headers={"Cookie": cookie,
+            "Authorization": "Bearer wrong"})[0], 401)
+
+    def test_otp_login_sets_cookie_and_never_returns_session_value_to_browser_json(self):
+        service = self.persistent_auth()
+        service.configure_emails(["owner@example.org"])
+        challenge = service.request_login("owner@example.org", "offline-client")["challenge_id"]
+        code = self.auth_store.values[ADMIN_STATE_PATH]["challenges"][0]["code"]
+        payload = json.dumps({"challenge_id": challenge, "code": code})
+        self.assertEqual(self.request("POST", "/api/admin-login/verify", "", {
+            "Content-Type": "application/json"})[0], 403)
+        status, headers, raw = self.request("POST", "/api/admin-login/verify", payload, {
+            "Content-Type": "application/json", "Origin": ENV["DIGEST_PUBLIC_BASE_URL"]})
+        self.assertEqual(status, 200)
+        self.assertEqual(set(json.loads(raw)), {"status", "expires_at"})
+        cookie = headers["Set-Cookie"].split(";", 1)[0]
+        self.assertNotIn(cookie.split("=", 1)[1], raw)
+        self.assertEqual(self.request("GET", "/api/admin/session", headers={"Cookie": cookie})[0], 200)
+        # A session never acquires the independent permission to change the email allowlist.
+        self.assertEqual(self.request("GET", "/api/admin/login-emails", headers={"Cookie": cookie})[0], 401)
 
     def test_confirmation_and_unsubscribe_get_only_show_shell_and_log_nothing(self):
         captured_out, captured_err = StringIO(), StringIO()

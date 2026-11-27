@@ -80,7 +80,7 @@ class AdminAuthService:
         self.store = store
         root = hmac.new(b"LevyQuant administrator key extract v1", _key(signing_key), hashlib.sha256).digest()
         self._keys = {purpose: hmac.new(root, ("levyquant/admin/" + purpose + "/v1\x01").encode(), hashlib.sha256).digest()
-                      for purpose in ("session", "otp", "email-rate", "client-rate")}
+                      for purpose in ("session", "recovery", "otp", "email-rate", "client-rate")}
         self._clock = now if callable(now) else (lambda: now) if now is not None else (lambda: datetime.now(timezone.utc))
 
     def _now(self):
@@ -151,9 +151,14 @@ class AdminAuthService:
                       or not _stamp(row["created_at"]) <= _stamp(message["reserved_at"]) < _stamp(row["expires_at"])):
                     raise ValueError
             for row in value["sessions"]:
-                if (not isinstance(row, dict) or set(row) != {"digest", "email", "policy_revision", "created_at", "expires_at"}
+                recovery = isinstance(row, dict) and "recovery_digest" in row
+                fields = {"digest", "recovery_digest", "created_at", "expires_at"} if recovery else {
+                    "digest", "email", "policy_revision", "created_at", "expires_at"}
+                if (not isinstance(row, dict) or set(row) != fields
                         or not isinstance(row["digest"], str) or not _HASH.fullmatch(row["digest"]) or row["digest"] in digests
-                        or _email(row["email"]) != row["email"] or type(row["policy_revision"]) is not int or row["policy_revision"] < 1
+                        or (recovery and (not isinstance(row["recovery_digest"], str) or not _HASH.fullmatch(row["recovery_digest"])))
+                        or (not recovery and (_email(row["email"]) != row["email"]
+                            or type(row["policy_revision"]) is not int or row["policy_revision"] < 1))
                         or _stamp(row["expires_at"]) - _stamp(row["created_at"]) != SESSION_TTL):
                     raise ValueError
                 digests.add(row["digest"])
@@ -280,14 +285,42 @@ class AdminAuthService:
                 raise AdminAuthError("state_not_acknowledged")
         return result
 
-    def authenticate_session(self, token):
+    def create_recovery_session(self, recovery_credential):
+        """Exchange an already verified recovery key for a revocable short session."""
+        if not isinstance(recovery_credential, str) or not re.fullmatch(r"[A-Za-z0-9_-]{32,256}", recovery_credential):
+            raise AdminAuthError("invalid_environment")
+        def create(state, policy, now):
+            if sum(len(state[key]) for key in ("challenges", "sessions", "requests")) >= MAX_RECORDS:
+                raise AdminAuthError("state_unavailable")
+            token = "lq_session_" + secrets.token_urlsafe(32)
+            expiry = (now + SESSION_TTL).isoformat()
+            state["sessions"].append({"digest": self._digest("session", token),
+                "recovery_digest": self._digest("recovery", recovery_credential),
+                "created_at": now.isoformat(), "expires_at": expiry})
+            return {"status": "authenticated", "token": token, "expires_at": expiry}
+        result = self._mutate(create)
+        if self.session_details(result["token"], recovery_credential=recovery_credential) is None:
+            raise AdminAuthError("state_not_acknowledged")
+        return result
+
+    def session_details(self, token, *, recovery_credential=None):
         if not isinstance(token, str) or not _SESSION.fullmatch(token):
-            return False
+            return None
         policy, state, now = self._policy(), self._state(), self._now()
         digest = self._digest("session", token)
         row = next((row for row in state["sessions"] if hmac.compare_digest(row["digest"], digest)), None)
-        return bool(row is not None and self._allowed(row, policy, now)
-                    and _stamp(row["created_at"]) <= now < _stamp(row["expires_at"]))
+        if row is None or not _stamp(row["created_at"]) <= now < _stamp(row["expires_at"]):
+            return None
+        if "recovery_digest" in row:
+            allowed = (isinstance(recovery_credential, str)
+                and re.fullmatch(r"[A-Za-z0-9_-]{32,256}", recovery_credential)
+                and hmac.compare_digest(row["recovery_digest"], self._digest("recovery", recovery_credential)))
+        else:
+            allowed = self._allowed(row, policy, now)
+        return {"status": "authenticated", "expires_at": row["expires_at"]} if allowed else None
+
+    def authenticate_session(self, token, *, recovery_credential=None):
+        return self.session_details(token, recovery_credential=recovery_credential) is not None
 
     def logout_session(self, token):
         if isinstance(token, str) and _SESSION.fullmatch(token):
@@ -295,7 +328,7 @@ class AdminAuthService:
             def revoke(state, policy, now):
                 state["sessions"] = [row for row in state["sessions"] if not hmac.compare_digest(row["digest"], digest)]
             self._mutate(revoke)
-            if self.authenticate_session(token):
+            if any(hmac.compare_digest(row["digest"], digest) for row in self._state()["sessions"]):
                 raise AdminAuthError("state_not_acknowledged")
         return {"status": "logged_out"}
 

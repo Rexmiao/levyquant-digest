@@ -14,9 +14,10 @@
     </div>
   </header>
   <main class="shell admin-main">
+    <p id="admin-session-status" class="form-status" role="status" aria-live="polite" hidden></p>
     <section id="admin-login" class="flow-card login-card">
       <p class="eyebrow" data-i18n="adminLoginEyebrow">OWNER ACCESS</p><h1 data-i18n="adminLoginTitle">Manage your briefing.</h1>
-      <p class="muted" data-i18n="adminEmailLoginCopy">Sign in with an email verification code. Refreshing this page requires a new sign-in.</p>
+      <p class="muted" data-i18n="adminEmailLoginCopy">Sign in with an email verification code. This browser stays signed in for up to one hour, including after refresh, until you sign out.</p>
       <form id="admin-email-login-form" autocomplete="off">
         <label for="admin-login-email" data-i18n="adminLoginEmailLabel">Administrator email</label>
         <input id="admin-login-email" type="email" maxlength="254" autocomplete="off" placeholder="you@example.com" data-i18n-placeholder="emailPlaceholder" aria-describedby="admin-email-login-status" required>

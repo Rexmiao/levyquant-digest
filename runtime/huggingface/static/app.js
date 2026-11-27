@@ -303,7 +303,7 @@
     moomooInvalid: '请输入 1–4 行非空关键词，每行最多 200 个字符，且不含控制字符。'
   });
   Object.assign(TEXT.en, {
-    adminEmailLoginCopy: 'Sign in with an email verification code. Refreshing this page requires a new sign-in.',
+    adminEmailLoginCopy: 'Sign in with an email verification code. This browser stays signed in for up to one hour, including after refresh, until you sign out.',
     adminLoginEmailLabel: 'Administrator email',
     adminRequestCode: 'Send verification code',
     adminRequestingCode: 'Requesting code…',
@@ -317,10 +317,14 @@
     adminCodeInvalid: 'The code is incorrect or has expired. Try again, or request a new code.',
     adminSessionExpired: 'Your session has expired. Request a new email code to sign in again.',
     adminSigningOut: 'Signing out…',
+    adminRestoringSession: 'Checking your saved sign-in…',
+    adminSessionRestoreUnavailable: 'Your saved sign-in could not be checked. Reload to try again, or sign in below.',
+    adminSignOutUnavailable: 'Sign-out could not be confirmed. Please try signing out again before leaving this browser.',
+    adminSignedOut: 'You have signed out.',
     adminRecoverySummary: 'Use a recovery credential'
   });
   Object.assign(TEXT.zh, {
-    adminEmailLoginCopy: '使用邮箱验证码登录。刷新页面后需要重新验证邮箱。',
+    adminEmailLoginCopy: '使用邮箱验证码登录。登录状态最长保留一小时，刷新页面无需重新验证；退出后会清除会话。',
     adminLoginEmailLabel: '管理员邮箱',
     adminRequestCode: '发送验证码',
     adminRequestingCode: '正在申请验证码…',
@@ -334,6 +338,10 @@
     adminCodeInvalid: '验证码不正确或已过期，请重试或重新申请验证码。',
     adminSessionExpired: '管理会话已过期，请重新获取邮箱验证码登录。',
     adminSigningOut: '正在退出登录…',
+    adminRestoringSession: '正在检查已保存的登录状态…',
+    adminSessionRestoreUnavailable: '暂时无法检查已有登录状态。请刷新重试，或在下方重新登录。',
+    adminSignOutUnavailable: '暂时无法确认已退出。离开当前浏览器前，请再次尝试退出登录。',
+    adminSignedOut: '已退出登录。',
     adminRecoverySummary: '使用恢复凭证'
   });
   Object.assign(TEXT.en, {
@@ -472,6 +480,8 @@
   const MOOMOO_QUERY_CONTROL_CHARS = /[\p{Cc}\p{Cf}\p{Cs}\p{Zl}\p{Zp}]/u;
   let language = 'en';
   let adminToken = '';
+  let adminCookieSession = false;
+  let adminSessionRestoring = false;
   let adminGeneration = 0;
   let emailLoginSequence = 0;
   let emailLoginTimer = null;
@@ -527,12 +537,20 @@
     if (status) error.status = status;
     return error;
   }
+  function hasAdminSession() {
+    return adminCookieSession || !!adminToken;
+  }
   async function api(path, {method = 'GET', body, admin = false, signal} = {}) {
     const sessionGeneration = adminGeneration;
     const headers = {'Accept': 'application/json'};
     if (body !== undefined) headers['Content-Type'] = 'application/json';
-    if (admin) headers.Authorization = 'Bearer ' + adminToken;
+    if (admin && adminToken) headers.Authorization = 'Bearer ' + adminToken;
     const response = await fetch(path, {method, headers, credentials: 'same-origin', cache: 'no-store', ...(signal ? {signal} : {}), ...(body === undefined ? {} : {body: JSON.stringify(body)})});
+    if (admin && sessionGeneration !== adminGeneration) {
+      const stale = errorFor('msgStaleSession');
+      stale.stale = true;
+      throw stale;
+    }
     let data;
     try { data = await response.json(); } catch { throw errorFor('msgServiceUnavailable'); }
     if (admin && sessionGeneration !== adminGeneration) {
@@ -541,7 +559,7 @@
       throw stale;
     }
     if (!response.ok) {
-      const sessionExpired = admin && response.status === 401 && adminToken.startsWith('lq_session_');
+      const sessionExpired = admin && response.status === 401 && (adminCookieSession || adminToken.startsWith('lq_session_'));
       if (admin && response.status === 401) {
         clearAdminSession();
         message(sessionExpired ? 'admin-email-login-status' : 'login-status',
@@ -889,7 +907,7 @@
   }
   function renderEmailLogin() {
     if (!$('admin-email-login-form')) return;
-    const busy = emailLogin.requestBusy || emailLogin.verifyBusy || recoveryLoginBusy || logoutBusy;
+    const busy = emailLogin.requestBusy || emailLogin.verifyBusy || recoveryLoginBusy || logoutBusy || adminSessionRestoring;
     const seconds = Math.max(0, Math.ceil((emailLogin.cooldownUntil - Date.now()) / 1000));
     const email = $('admin-login-email');
     const code = $('admin-login-code');
@@ -923,7 +941,7 @@
     }
   }
   async function requestAdminCode() {
-    if (emailLogin.requestBusy || emailLogin.verifyBusy || recoveryLoginBusy || logoutBusy ||
+    if (emailLogin.requestBusy || emailLogin.verifyBusy || recoveryLoginBusy || logoutBusy || adminSessionRestoring ||
       emailLogin.cooldownUntil > Date.now() || !$('admin-email-login-form').reportValidity()) return;
     const generation = ++adminGeneration;
     const sequence = ++emailLoginSequence;
@@ -952,8 +970,13 @@
       }
     }
   }
-  function showAdminDashboard(generation, token) {
-    if (generation !== adminGeneration || adminToken !== token) return false;
+  function validAdminSession(result) {
+    return result?.status === 'authenticated' && typeof result.expires_at === 'string' &&
+      /(?:Z|[+-][0-9]{2}:[0-9]{2})$/.test(result.expires_at) &&
+      Number.isFinite(Date.parse(result.expires_at));
+  }
+  function showAdminDashboard(generation) {
+    if (generation !== adminGeneration || !hasAdminSession()) return false;
     $('admin-token').value = '';
     $('admin-recovery-login').open = false;
     $('admin-login').hidden = true;
@@ -965,7 +988,7 @@
   async function verifyAdminCode() {
     const code = $('admin-login-code').value;
     if (!emailLogin.challengeId || !/^[0-9]{6}$/.test(code) || emailLogin.requestBusy ||
-      emailLogin.verifyBusy || recoveryLoginBusy || logoutBusy) return;
+      emailLogin.verifyBusy || recoveryLoginBusy || logoutBusy || adminSessionRestoring) return;
     const generation = ++adminGeneration;
     const sequence = ++emailLoginSequence;
     const state = emailLogin;
@@ -977,19 +1000,16 @@
       const result = await api('/api/admin-login/verify', {method: 'POST',
         body: {challenge_id: state.challengeId, code: state.code}});
       if (generation !== adminGeneration || sequence !== emailLoginSequence || state !== emailLogin) return;
-      if (result?.status !== 'authenticated' || typeof result.token !== 'string' ||
-        !/^lq_session_[A-Za-z0-9_-]{43}$/.test(result.token) || typeof result.expires_at !== 'string' ||
-        !/(?:Z|[+-][0-9]{2}:[0-9]{2})$/.test(result.expires_at) || !Number.isFinite(Date.parse(result.expires_at))) {
-        throw errorFor('adminEmailLoginUnavailable');
-      }
-      const token = result.token;
-      adminToken = token;
+      if (!validAdminSession(result)) throw errorFor('adminEmailLoginUnavailable');
+      adminToken = '';
+      adminCookieSession = true;
       state.code = ''; state.challengeId = null;
       await refreshAdmin();
-      showAdminDashboard(generation, token);
+      showAdminDashboard(generation);
     } catch (error) {
       if (error.stale || generation !== adminGeneration || sequence !== emailLoginSequence || state !== emailLogin) return;
       adminToken = '';
+      adminCookieSession = false;
       message('admin-email-login-status', error.status === 401 ? 'adminCodeInvalid' :
         error.status === 429 ? 'msgRateLimited' : 'adminEmailLoginUnavailable', true);
     } finally {
@@ -999,10 +1019,37 @@
       }
     }
   }
+  async function restoreAdminSession() {
+    const generation = ++adminGeneration;
+    adminSessionRestoring = true;
+    $('admin-session-status').hidden = false;
+    message('admin-session-status', 'adminRestoringSession');
+    renderEmailLogin();
+    try {
+      const result = await api('/api/admin/session');
+      if (generation !== adminGeneration) return;
+      if (!validAdminSession(result)) throw errorFor('adminSessionRestoreUnavailable');
+      adminToken = '';
+      adminCookieSession = true;
+      await refreshAdmin();
+      showAdminDashboard(generation);
+    } catch (error) {
+      if (error.stale || generation !== adminGeneration) return;
+      adminToken = '';
+      adminCookieSession = false;
+      if (error.status !== 401) message('admin-email-login-status', 'adminSessionRestoreUnavailable', true);
+    } finally {
+      if (generation === adminGeneration) {
+        adminSessionRestoring = false;
+        $('admin-session-status').hidden = true;
+        message('admin-session-status', '');
+        renderEmailLogin();
+      }
+    }
+  }
   async function logout() {
     if (logoutBusy) return;
-    const token = adminToken;
-    if (!token.startsWith('lq_session_')) { clearAdminSession(); return; }
+    if (!hasAdminSession()) { clearAdminSession(); return; }
     const generation = ++adminGeneration;
     logoutBusy = true;
     $('admin-dashboard').hidden = true;
@@ -1011,19 +1058,35 @@
     renderEmailLogin();
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 10000);
+    let signedOut = false;
     try {
-      await api('/api/admin/logout', {method: 'POST', admin: true, body: {}, signal: controller.signal});
-    } catch { /* Local credentials are cleared even if revocation cannot be confirmed. */ }
+      const result = await api('/api/admin/logout', {method: 'POST', admin: true, body: {}, signal: controller.signal});
+      if (result?.status !== 'signed_out') throw errorFor('adminSignOutUnavailable');
+      signedOut = true;
+    } catch (error) {
+      if (error.stale || generation !== adminGeneration) return;
+      $('admin-login').hidden = true;
+      $('admin-dashboard').hidden = false;
+      message('action-status', 'adminSignOutUnavailable', true);
+    }
     finally {
       clearTimeout(timeout);
-      if (generation === adminGeneration && adminToken === token) clearAdminSession();
-      logoutBusy = false;
-      renderEmailLogin();
+      if (generation === adminGeneration) {
+        if (signedOut) {
+          clearAdminSession();
+          message('admin-email-login-status', 'adminSignedOut');
+        } else {
+          logoutBusy = false;
+          renderEmailLogin();
+        }
+      }
     }
   }
   function clearAdminSession() {
     adminGeneration += 1;
     adminToken = '';
+    adminCookieSession = false;
+    adminSessionRestoring = false;
     recoveryLoginBusy = false;
     logoutBusy = false;
     resetEmailLogin();
@@ -1047,6 +1110,8 @@
     $('admin-token').value = '';
     $('admin-dashboard').hidden = true;
     $('admin-login').hidden = false;
+    $('admin-session-status').hidden = true;
+    message('admin-session-status', '');
     $('subscribers-body').replaceChildren();
     renderDeliveryReport();
     $('private-preview').srcdoc = '';
@@ -1216,7 +1281,7 @@
     runsStatus.textContent = '';
     reportStatus.classList.toggle('error', state === 'unavailable');
     runsStatus.classList.toggle('warning', false);
-    if (!adminToken || state === 'idle') return;
+    if (!hasAdminSession() || state === 'idle') return;
     if (busy || state === 'unavailable') {
       const key = busy ? 'deliveryLoading' : 'deliveryUnavailable';
       reportStatus.textContent = t(key);
@@ -1261,7 +1326,7 @@
     return value;
   }
   async function loadDeliveryReport() {
-    if (!adminToken) return;
+    if (!hasAdminSession()) return;
     const generation = adminGeneration;
     const sequence = ++deliveryLoadSequence;
     view.deliveryReport = null;
@@ -1316,23 +1381,23 @@
     const blocked = ['unavailable', 'conflict', 'invalid'].includes(state.status);
     const valid = moomooQueriesFromDraft(state.draft) !== null;
     if (field.value !== state.draft) field.value = state.draft;
-    field.disabled = !adminToken || state.revision === null || busy;
+    field.disabled = !hasAdminSession() || state.revision === null || busy;
     field.setAttribute('aria-invalid', String(state.status === 'invalid'));
     $('moomoo-settings-form').setAttribute('aria-busy', String(busy));
-    $('moomoo-save-button').disabled = !adminToken || busy || blocked || !valid ||
+    $('moomoo-save-button').disabled = !hasAdminSession() || busy || blocked || !valid ||
       state.revision === null || !moomooDraftIsDirty(state);
     $('moomoo-save-button').textContent = t(state.status === 'saving' ? 'moomooSaving' : 'moomooSave');
-    $('moomoo-refresh-button').disabled = !adminToken || busy;
+    $('moomoo-refresh-button').disabled = !hasAdminSession() || busy;
     const statusKeys = {loading: 'moomooLoading', loaded: 'moomooLoaded', dirty: 'moomooDirty',
       saving: 'moomooSaving', saved: 'moomooSaved', conflict: 'moomooConflict',
       unavailable: 'moomooUnavailable', invalid: 'moomooInvalid'};
     const statusNode = $('moomoo-settings-status');
-    statusNode.textContent = adminToken ? t(statusKeys[state.status] || 'moomooUnavailable') : '';
+    statusNode.textContent = hasAdminSession() ? t(statusKeys[state.status] || 'moomooUnavailable') : '';
     statusNode.classList.toggle('error', ['conflict', 'unavailable', 'invalid'].includes(state.status));
     statusNode.classList.toggle('success', state.status === 'saved');
   }
   async function loadMoomooSettings({replaceDraft = false} = {}) {
-    if (!adminToken || moomooSettings.status === 'saving') return;
+    if (!hasAdminSession() || moomooSettings.status === 'saving') return;
     const generation = adminGeneration;
     const sequence = ++moomooLoadSequence;
     const state = moomooSettings;
@@ -1357,7 +1422,7 @@
   async function saveMoomooSettings() {
     const state = moomooSettings;
     const queries = moomooQueriesFromDraft(state.draft);
-    if (!adminToken || state.revision === null || !queries || !moomooDraftIsDirty(state) ||
+    if (!hasAdminSession() || state.revision === null || !queries || !moomooDraftIsDirty(state) ||
       ['loading', 'saving', 'unavailable', 'conflict', 'invalid'].includes(state.status)) return;
     const generation = adminGeneration;
     const revision = state.revision;
@@ -1413,7 +1478,7 @@
         message('action-status', 'previewReady');
       } else if (['failed', 'error'].includes(data.status)) {
         throw errorFor('previewFailed');
-      } else if (attempt < 180 && adminToken) {
+      } else if (attempt < 180 && hasAdminSession()) {
         previewTimer = setTimeout(() => pollPreview(attempt + 1), 3000);
       } else {
         $('generate-button').disabled = false;
@@ -1427,7 +1492,7 @@
   }
   function adminPage() {
     $('admin-login-email').addEventListener('input', event => {
-      if (emailLogin.requestBusy || emailLogin.verifyBusy || recoveryLoginBusy || logoutBusy) return;
+      if (emailLogin.requestBusy || emailLogin.verifyBusy || recoveryLoginBusy || logoutBusy || adminSessionRestoring) return;
       if (emailLogin.email !== event.target.value && emailLogin.challengeId) {
         emailLogin.challengeId = null;
         emailLogin.code = '';
@@ -1463,20 +1528,27 @@
     $('moomoo-refresh-button').addEventListener('click', () => loadMoomooSettings({replaceDraft: true}));
     $('login-form').addEventListener('submit', async event => {
       event.preventDefault();
-      if (emailLogin.requestBusy || emailLogin.verifyBusy || recoveryLoginBusy || logoutBusy) return;
+      if (emailLogin.requestBusy || emailLogin.verifyBusy || recoveryLoginBusy || logoutBusy || adminSessionRestoring) return;
       const generation = ++adminGeneration;
       emailLoginSequence += 1;
       const token = $('admin-token').value.trim();
+      $('admin-token').value = '';
       adminToken = token;
       recoveryLoginBusy = true;
       renderEmailLogin();
       message('login-status', 'validatingAdmin');
       try {
+        const result = await api('/api/admin/session', {method: 'POST', admin: true, body: {}});
+        if (generation !== adminGeneration) return;
+        if (!validAdminSession(result)) throw errorFor('adminEmailLoginUnavailable');
+        adminToken = '';
+        adminCookieSession = true;
         await refreshAdmin();
-        showAdminDashboard(generation, token);
+        showAdminDashboard(generation);
       } catch (error) {
         if (error.stale || generation !== adminGeneration) return;
         adminToken = '';
+        adminCookieSession = false;
         showError('login-status', error);
       } finally {
         if (generation === adminGeneration) { recoveryLoginBusy = false; renderEmailLogin(); }
@@ -1517,6 +1589,7 @@
         if (!error.stale) showError('action-status', error);
       } finally { $('send-button').disabled = false; }
     });
+    restoreAdminSession();
   }
   for (const button of document.querySelectorAll('[data-language]')) {
     button.addEventListener('click', () => setLanguage(button.getAttribute('data-language'), true));
