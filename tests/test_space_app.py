@@ -820,6 +820,119 @@ class ArchiveAppTests(unittest.TestCase):
         if code:
             self.assertEqual(caught.exception.code, code)
 
+    def seed_full_month(self):
+        days = [f"2026-10-{number:02d}" for number in range(31, 0, -1)]
+        values = {"_state.json": {"schema_version": 1, "encrypted_state": True},
+                  archive.INDEX_PATH: {"schema_version": 1, "dates": days + ["2026-09-30"]}}
+        for day in days:
+            value = self.snapshot(day, "COBALT published research" if day in (days[15], days[-1]) else "Public base news")
+            if day == days[0]:
+                value["subject"] = "Cobalt headline only"
+            values["archive/editions/" + day + ".json"] = value
+        values["archive/editions/2026-09-30.json"] = self.snapshot("2026-09-30", "Cobalt outside the selected month")
+        self.store = MemoryStore(values)
+        self.factory = Mock(return_value=self.store)
+        self.app = space_app.SpaceApplication(ENV, store_factory=self.factory)
+        return days
+
+    def body_reads(self):
+        return [call.args[0] for call in self.store.load.call_args_list if call.args[0].startswith("archive/editions/")]
+
+    def marker_reads(self):
+        return sum(call.args[0] == "_state.json" for call in self.store.load.call_args_list)
+
+    def test_month_browse_reads_only_the_requested_page_in_a_31_day_fixture(self):
+        for page, expected in ((1, 10), (4, 1), (5, 0)):
+            with self.subTest(page=page):
+                days = self.seed_full_month()
+                _, result = self.request("POST", "/api/archive/search", {"month": "2026-10", "query": "", "page": page})
+                start = (page - 1) * 10
+                self.assertEqual(result["total"], 31)
+                self.assertEqual(result["page_size"], 10)
+                self.assertEqual(result["has_more"], start + 10 < 31)
+                self.assertEqual([item["date"] for item in result["items"]], days[start:start + 10])
+                self.assertEqual(len(self.body_reads()), expected)
+                self.assertEqual(self.marker_reads(), 1)
+                self.factory.assert_called_once_with()
+                self.store.save.assert_not_called(); self.store.ensure_state_branch.assert_not_called()
+
+    def test_full_text_search_checks_the_whole_month_including_title_and_last_date(self):
+        days = self.seed_full_month()
+        _, result = self.request("POST", "/api/archive/search", {"month": "2026-10", "query": "cObAlT", "page": 1})
+        self.assertEqual([item["date"] for item in result["items"]], [days[0], days[15], days[-1]])
+        self.assertEqual(result["total"], 3)
+        self.assertFalse(result["has_more"])
+        self.assertEqual(len(self.body_reads()), 31)
+        self.assertNotIn("archive/editions/2026-09-30.json", self.body_reads())
+        self.assertEqual(self.marker_reads(), 1)
+        self.factory.assert_called_once_with()
+
+    def test_warm_browse_and_full_text_cache_do_not_open_another_reader(self):
+        self.seed_full_month()
+        self.request("POST", "/api/archive/search", {"month": "2026-10", "query": "cobalt", "page": 1})
+        self.store.load.reset_mock(); self.factory.reset_mock()
+        _, browse = self.request("POST", "/api/archive/search", {"month": "2026-10", "query": "   ", "page": 1})
+        _, search = self.request("POST", "/api/archive/search", {"month": "2026-10", "query": "COBALT", "page": 1})
+        self.assertEqual((browse["query"], len(browse["items"]), browse["total"]), ("", 10, 31))
+        self.assertEqual(search["total"], 3)
+        self.store.load.assert_not_called(); self.factory.assert_not_called()
+
+    def test_only_a_current_page_failure_blocks_browsing_but_any_month_failure_blocks_search(self):
+        days = self.seed_full_month()
+        del self.store.values["archive/editions/" + days[-1] + ".json"]
+        _, result = self.request("POST", "/api/archive/search", {"month": "2026-10", "query": "", "page": 1})
+        self.assertEqual((result["total"], len(result["items"])), (31, 10))
+        self.assert_error(503, lambda: self.request("POST", "/api/archive/search",
+            {"month": "2026-10", "query": "", "page": 4}), "archive_unavailable")
+        self.assert_error(503, lambda: self.request("POST", "/api/archive/search",
+            {"month": "2026-10", "query": "unmatched-query", "page": 1}), "archive_unavailable")
+        days = self.seed_full_month()
+        del self.store.values["archive/editions/" + days[0] + ".json"]
+        self.assert_error(503, lambda: self.request("POST", "/api/archive/search",
+            {"month": "2026-10", "query": "", "page": 1}), "archive_unavailable")
+
+    def test_cached_catalog_requires_fresh_marker_for_cold_bodies_and_edition_reuses_request_reader(self):
+        days = self.seed_full_month()
+        self.request("GET", "/api/archive")
+        self.store.load.reset_mock(); self.factory.reset_mock()
+        self.request("POST", "/api/archive/search", {"month": "2026-10", "query": "", "page": 1})
+        self.assertEqual(len(self.body_reads()), 10)
+        self.assertEqual(self.marker_reads(), 1)
+        self.assertFalse(any(call.args[0] == archive.INDEX_PATH for call in self.store.load.call_args_list))
+        self.factory.assert_called_once_with()
+        self.store.load.reset_mock(); self.factory.reset_mock()
+        self.request("POST", "/api/archive/search", {"month": "2026-10", "query": "", "page": 2})
+        self.assertEqual(len(self.body_reads()), 10)
+        self.assertEqual(self.marker_reads(), 1)
+        self.factory.assert_called_once_with()
+        days = self.seed_full_month()
+        _, result = self.request("POST", "/api/archive/edition", {"date": days[0]})
+        self.assertEqual(result["edition"]["date"], days[0])
+        self.assertEqual(len(self.body_reads()), 1)
+        self.assertEqual(self.marker_reads(), 1)
+        self.factory.assert_called_once_with()
+
+    def test_cached_catalog_and_expired_directory_never_bypass_marker_authentication_failures(self):
+        for warm_body in (False, True):
+            with self.subTest(warm_body=warm_body):
+                self.seed_full_month()
+                if warm_body:
+                    self.request("POST", "/api/archive/search", {"month": "2026-10", "query": "cobalt", "page": 1})
+                    self.app._archive_dates_at -= 61
+                else:
+                    self.request("GET", "/api/archive")
+                self.store.load.reset_mock(); self.factory.reset_mock()
+                def failed_authentication(path):
+                    if path == "_state.json":
+                        raise StateError("Offline authentication failure")
+                    return deepcopy(self.store.values.get(path))
+                self.store.load.side_effect = failed_authentication
+                self.assert_error(503, lambda: self.request("POST", "/api/archive/search",
+                    {"month": "2026-10", "query": "", "page": 1}), "archive_unavailable")
+                self.assertEqual(self.marker_reads(), 1)
+                self.assertEqual(self.body_reads(), [])
+                self.store.save.assert_not_called(); self.store.ensure_state_branch.assert_not_called()
+
     def test_public_archive_is_month_bounded_paginated_searchable_and_never_reads_private_editions(self):
         for number in range(1, 13):
             archive.publish_edition(self.store, self.snapshot(f"2026-11-{number:02d}",

@@ -466,12 +466,18 @@ class SpaceApplication:
             self._archive_dates = None
         return {"status": "published", "date": preview["date"]}
 
-    def _archive_directory(self) -> list[str]:
+    def _archive_directory_context(self):
+        """Return a reader only when this request just verified the marker."""
         with self._archive_lock:
+            store = None
             if self._archive_dates is None or time.monotonic() - self._archive_dates_at >= 60:
-                self._archive_dates = archive.read_index(self._new_store(read_only=True))
+                store = self._new_store(read_only=True)
+                self._archive_dates = archive.read_index(store)
                 self._archive_dates_at = time.monotonic()
-            return list(self._archive_dates)
+            return list(self._archive_dates), store
+
+    def _archive_directory(self) -> list[str]:
+        return self._archive_directory_context()[0]
 
     def _archive_edition(self, day: str, *, store=None) -> dict:
         with self._archive_lock:
@@ -503,32 +509,37 @@ class SpaceApplication:
                 archive.validate_date(month + "-01")
             except archive.ArchiveError:
                 raise AppError(400, "invalid_request") from None
-        dates = self._archive_directory()
+        dates, store = self._archive_directory_context()
         months = sorted({day[:7] for day in dates}, reverse=True)
         selected_month = month or (months[0] if months else "")
         selected = [day for day in dates if day.startswith(selected_month + "-")] if selected_month else []
         if len(selected) > 31:
             raise archive.ArchiveError("Archive month exceeds the supported date count")
+        offset = (page - 1) * 10
+        # Browsing needs only this page. A keyword search still checks every
+        # date in the month so totals and matches cannot omit later pages.
+        scan_dates = selected if query else selected[offset:offset + 10]
+        needle = query.casefold()
         matched = []
-        store = None
-        for day in selected:
+        for day in scan_dates:
             with self._archive_lock:
                 if store is None and day not in self._archive_bodies:
                     store = self._new_store(read_only=True)
                 edition = self._archive_edition(day, store=store)
-            if query and query.casefold() not in (edition["subject"] + "\n" + edition["text"]).casefold():
+            if needle and needle not in (edition["subject"] + "\n" + edition["text"]).casefold():
                 continue
             plain = " ".join(edition["text"].split())
-            position = plain.casefold().find(query.casefold()) if query else 0
+            position = plain.casefold().find(needle) if needle else 0
             start = max(0, position - 70) if position >= 0 else 0
             excerpt = ("…" if start else "") + plain[start:start + 240]
             if start + 240 < len(plain):
                 excerpt += "…"
             matched.append({"date": day, "subject": edition["subject"], "excerpt": excerpt})
-        offset = (page - 1) * 10
+        total = len(matched) if query else len(selected)
         return {"month": selected_month, "query": query, "page": page, "page_size": 10,
-                "total": len(matched), "months": months, "items": matched[offset:offset + 10],
-                "has_more": offset + 10 < len(matched)}
+                "total": total, "months": months,
+                "items": matched[offset:offset + 10] if query else matched,
+                "has_more": offset + 10 < total}
 
     def _archive_backfill(self, body: dict) -> dict:
         _body_fields(body, {"cursor"})
@@ -595,9 +606,10 @@ class SpaceApplication:
                     archive.validate_date(day)
                 except archive.ArchiveError:
                     raise AppError(400, "invalid_request") from None
-                if day not in self._archive_directory():
+                dates, store = self._archive_directory_context()
+                if day not in dates:
                     raise AppError(404, "archive_not_found")
-                return 200, {"edition": self._archive_edition(day)}
+                return 200, {"edition": self._archive_edition(day, store=store)}
             except StateError:
                 raise AppError(503, "archive_unavailable") from None
         if method == "POST" and path == "/api/one-click-unsubscribe":

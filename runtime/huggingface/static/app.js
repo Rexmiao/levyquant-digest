@@ -704,27 +704,50 @@
     archiveState.searching = false; archiveState.searchError = ''; archiveState.results = null;
     renderArchive();
   }
+  function archiveSearchResult(data, requestedMonth, query, page) {
+    const months = archiveMonths(data.months), month = requestedMonth || months[0] || '';
+    if (data.month !== month || data.page !== page || data.page_size !== 10 || !Number.isSafeInteger(data.total) || data.total < 0 ||
+        typeof data.has_more !== 'boolean' || !Array.isArray(data.items) || data.items.length > 10 || data.items.some(item =>
+          !item || !validArchiveDate(item.date) || item.date.slice(0, 7) !== month || typeof item.subject !== 'string' || typeof item.excerpt !== 'string') ||
+        (!month && (data.total !== 0 || data.items.length || data.has_more))) throw errorFor('archiveSearchUnavailable');
+    return {months, month, query, page, total: data.total, has_more: data.has_more, items: data.items.map(item =>
+      ({date: item.date, subject: item.subject, excerpt: item.excerpt}))};
+  }
   async function loadArchiveIndex(preferredDate = '') {
     const sequence = ++archiveIndexSequence;
-    archiveState.indexLoading = true; archiveState.indexError = ''; renderArchive();
-    let ready = false;
+    const searchSequence = ++archiveSearchSequence, query = archiveState.query.trim();
+    archiveSearchController?.abort(); archiveSearchController = null;
+    let month = validArchiveDate(preferredDate) ? preferredDate.slice(0, 7) : archiveState.month;
+    archiveState.indexLoading = true; archiveState.indexError = ''; archiveState.searching = true;
+    archiveState.searchError = ''; archiveState.results = null; renderArchive();
     try {
-      const data = await api('/api/archive');
+      let data = await api('/api/archive/search', {method: 'POST', body: {month, query, page: 1}});
       if (sequence !== archiveIndexSequence) return;
-      archiveState.months = archiveMonths(data.months);
-      if (!archiveState.months.includes(archiveState.month)) {
-        archiveState.month = archiveState.months.includes(preferredDate.slice(0, 7)) ? preferredDate.slice(0, 7) : archiveState.months[0] || '';
+      let result = archiveSearchResult(data, month, query, 1);
+      if (month && !result.months.includes(month)) {
+        month = result.months[0] || '';
+        if (month) {
+          data = await api('/api/archive/search', {method: 'POST', body: {month, query, page: 1}});
+          if (sequence !== archiveIndexSequence) return;
+          result = archiveSearchResult(data, month, query, 1);
+          if (!result.months.includes(month)) throw errorFor('archiveSearchUnavailable');
+        } else if (result.total || result.items.length || result.has_more) throw errorFor('archiveSearchUnavailable');
       }
-      ready = true;
+      archiveState.months = result.months; archiveState.month = month || result.months[0] || '';
+      archiveState.results = archiveState.month && searchSequence === archiveSearchSequence ? result : null;
     } catch (error) {
       if (sequence !== archiveIndexSequence) return;
       archiveState.indexError = error.status === 429 ? 'msgRateLimited' : 'archiveIndexUnavailable';
     } finally {
-      if (sequence === archiveIndexSequence) { archiveState.indexLoading = false; renderArchive(); }
+      if (sequence === archiveIndexSequence) {
+        archiveState.indexLoading = false;
+        if (searchSequence === archiveSearchSequence) archiveState.searching = false;
+        renderArchive();
+      }
     }
-    if (ready && sequence === archiveIndexSequence && archiveState.month) searchArchive(1);
   }
   async function searchArchive(page = 1) {
+    if (archiveState.indexLoading) return;
     const month = archiveState.month, query = archiveState.query.trim();
     if (!validArchiveMonth(month)) { archiveState.searchError = 'archiveMonthRequired'; renderArchive(); return; }
     if (query.length > 100 || /[\x00-\x1f\x7f]/.test(query)) { archiveState.searchError = 'archiveQueryInvalid'; renderArchive(); return; }
@@ -734,13 +757,7 @@
     try {
       const data = await api('/api/archive/search', {method: 'POST', signal: archiveSearchController.signal, body: {month, query, page}});
       if (sequence !== archiveSearchSequence) return;
-      if (data.month !== month || data.page !== page || data.page_size !== 10 || !Number.isSafeInteger(data.total) || data.total < 0 ||
-          typeof data.has_more !== 'boolean' || !Array.isArray(data.items) || data.items.length > 10 || data.items.some(item =>
-            !item || !validArchiveDate(item.date) || item.date.slice(0, 7) !== month || typeof item.subject !== 'string' || typeof item.excerpt !== 'string')) {
-        throw errorFor('archiveSearchUnavailable');
-      }
-      archiveState.results = {month, query, page, total: data.total, has_more: data.has_more, items: data.items.map(item =>
-        ({date: item.date, subject: item.subject, excerpt: item.excerpt}))};
+      archiveState.results = archiveSearchResult(data, month, query, page);
     } catch (error) {
       if (sequence !== archiveSearchSequence || error.name === 'AbortError') return;
       archiveState.searchError = error.status === 429 ? 'msgRateLimited' : 'archiveSearchUnavailable';
