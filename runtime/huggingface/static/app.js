@@ -500,7 +500,7 @@
       const saved = localStorage.getItem(LANGUAGE_KEY);
       if (saved === 'en' || saved === 'zh') return saved;
     } catch { /* Language choice also works when browser storage is disabled. */ }
-    return String(navigator.language || '').toLowerCase().startsWith('zh') ? 'zh' : 'en';
+    return 'en';
   }
   function setLanguage(next, save = false) {
     if (!['en', 'zh'].includes(next)) return;
