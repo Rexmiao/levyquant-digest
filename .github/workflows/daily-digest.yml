@@ -5,6 +5,10 @@ run-name: "LevyQuant Daily Digest [${{ github.event_name == 'schedule' && 'send'
   schedule:
     - cron: '0 7 * * *'
       timezone: America/New_York
+    - cron: '20 7 * * *'
+      timezone: America/New_York
+    - cron: '10 8 * * *'
+      timezone: America/New_York
   workflow_dispatch:
     inputs:
       run_mode:
@@ -104,6 +108,7 @@ jobs:
 
       - name: Run the digest command
         env:
+          LEVYQUANT_SCHEDULED_SEND: ${{ github.event_name == 'schedule' && 'true' || 'false' }}
           # GITHUB_REPOSITORY is supplied by GitHub; no separate account login.
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}

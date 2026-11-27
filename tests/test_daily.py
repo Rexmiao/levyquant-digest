@@ -854,6 +854,72 @@ class InputAndPipelineTests(unittest.TestCase):
         self.generate.assert_not_called()
         self.assertEqual(TestStore(self.root / "remote").load(PATH)["html"], frozen["html"])
 
+    def test_scheduled_check_sends_missing_edition_then_skips_completed_edition(self):
+        scheduled = {**self.environment, "LEVYQUANT_SCHEDULED_SEND": "true"}
+        first = daily.run(self.config, "send", scheduled, self.root / "first")
+        self.assertEqual(first["accepted"], len(RECIPIENTS))
+        self.assertEqual(self.smtp.call_count, len(RECIPIENTS))
+        self.assertEqual(self.collect.call_count, 1)
+        self.collect.reset_mock()
+        self.generate.reset_mock()
+        self.smtp.reset_mock()
+        later = {**scheduled, "GITHUB_RUN_ID": "124",
+                 "DIGEST_RECIPIENTS": json.dumps([*RECIPIENTS, "new@example.org"])}
+        with patch("levyquant.daily.SubscriptionService") as subscriptions:
+            result = daily.run(self.config, "send", later, self.root / "backup")
+        self.assertEqual(result["status"], "already_submitted_no_mail_sent")
+        self.assertEqual(result["already_accepted"], len(RECIPIENTS))
+        subscriptions.assert_not_called()
+        self.collect.assert_not_called()
+        self.generate.assert_not_called()
+        self.smtp.assert_not_called()
+        manual = {**later, "GITHUB_RUN_ID": "125", "LEVYQUANT_SCHEDULED_SEND": "false"}
+        result = daily.run(self.config, "send", manual, self.root / "manual")
+        self.assertEqual(result["accepted"], len(RECIPIENTS) + 1)
+        self.smtp.assert_called_once()
+        self.assertEqual(self.smtp.call_args.args[0]["To"], "new@example.org")
+
+    def test_scheduled_check_repairs_publication_after_completed_mail_without_sending_again(self):
+        with patch("levyquant.daily.publish_latest", side_effect=StateError("offline publish failure")):
+            with self.assertRaises(StateError):
+                daily.run(self.config, "send", self.environment, self.root / "primary")
+        self.assertEqual(self.smtp.call_count, len(RECIPIENTS))
+        self.assertIsNone(TestStore(self.root / "remote").load("public/latest.json"))
+        self.smtp.reset_mock()
+        result = daily.run(self.config, "send", {**self.environment, "GITHUB_RUN_ID": "124",
+                           "LEVYQUANT_SCHEDULED_SEND": "true"}, self.root / "backup")
+        self.assertEqual(result["status"], "already_submitted_no_mail_sent")
+        self.assertEqual(TestStore(self.root / "remote").load("public/latest.json")["date"], DATE)
+        self.smtp.assert_not_called()
+
+    def test_scheduled_check_retries_only_a_safe_failure_in_the_frozen_edition(self):
+        self.smtp.side_effect = [DeliveryError("offline rejection", stage="recipient", smtp_code=450), {"status": "accepted"}]
+        first = daily.run(self.config, "send", self.environment, self.root / "primary")
+        self.assertEqual(first["accepted"], 1)
+        failed_recipient = str(self.smtp.call_args_list[0].args[0]["To"])
+        self.smtp.reset_mock(side_effect=True)
+        self.smtp.return_value = {"status": "accepted"}
+        result = daily.run(self.config, "send", {**self.environment, "GITHUB_RUN_ID": "124",
+                           "LEVYQUANT_SCHEDULED_SEND": "true"}, self.root / "backup")
+        self.assertEqual(result["accepted"], len(RECIPIENTS))
+        self.smtp.assert_called_once()
+        self.assertEqual(self.smtp.call_args.args[0]["To"], failed_recipient)
+        self.assertEqual(self.collect.call_count, 1)
+
+    def test_delayed_schedule_does_not_send_next_edition_before_seven(self):
+        class EarlyClock(Clock):
+            @classmethod
+            def now(cls, tz=None):
+                return super().now(tz) - timedelta(minutes=1)
+
+        with patch("levyquant.daily.datetime", EarlyClock):
+            result = daily.run(self.config, "send", {**self.environment, "LEVYQUANT_SCHEDULED_SEND": "true"},
+                               self.root / "early")
+        self.assertEqual(result, {"mode": "send", "status": "scheduled_window_not_open", "date": DATE})
+        self.factory.assert_not_called()
+        self.collect.assert_not_called()
+        self.smtp.assert_not_called()
+
     def test_old_run_cannot_be_reused_for_a_new_date_and_unanchored_reruns_stop(self):
         store = TestStore(self.root / "remote")
         store.load("runs/123.json")

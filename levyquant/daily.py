@@ -14,7 +14,7 @@ import sys
 from zoneinfo import ZoneInfo
 
 from .editor import EditorError, editor_to_digest, generate_editor
-from .delivery_reports import COUNT_FIELDS, ERROR_TYPES, RESULT_CODES, record_run_report, summarize_edition
+from .delivery_reports import COUNT_FIELDS, ERROR_TYPES, RESULT_CODES, SUMMARY_FIELDS, record_run_report, summarize_edition
 from .feeds import DIAGNOSTIC_STATUSES, collect_sources
 from .render import RECIPIENT_FOOTER_SLOT, _safe_url, render_digest
 from .smtp_delivery import DeliveryError, DeliveryUncertain, prepare_message, send_one
@@ -452,12 +452,40 @@ def publish_latest(store, edition: dict) -> None:
                 raise
 
 
+def _completed_delivery_counts(edition: dict) -> dict | None:
+    counts = summarize_edition(edition)
+    if counts["status"] != "completed" or not counts["accepted"]:
+        return None
+    records = edition["deliveries"].values()
+    accepted = sum(isinstance(record, dict) and record.get("status") == "accepted" for record in records)
+    skipped = sum(isinstance(record, dict) and record.get("status") == "skipped_unsubscribed" for record in records)
+    if (accepted != counts["accepted"] or skipped != counts["skipped_unsubscribed"]
+            or accepted + skipped != len(edition["deliveries"])):
+        raise StateError("Stored delivery totals do not match recipient records")
+    return {**{field: counts[field] for field in SUMMARY_FIELDS},
+            "already_accepted": accepted, "blocked_or_failed": 0}
+
+
+def _publish_sent_edition(store, edition: dict, history: dict, *, now: datetime, history_days: int) -> None:
+    publish_latest(store, edition)
+    cutoff = (now - timedelta(days=history_days)).date().isoformat()
+    current = {item["id"]: item for item in history["events"] if item.get("date", "") >= cutoff}
+    current.update({item["id"]: item for item in edition["events"]})
+    events = list(current.values())[-1000:]
+    if history["events"] != events:
+        store.save("history.json", {**history, "events": events})
+
+
 def run(config: dict, mode: str, environment: dict, output: Path, *, moomoo_settings=None) -> dict:
     config = dict(config)
     config["sender"] = environment.get("SMTP_USERNAME") or config.get("sender")
     recipients = preflight(config, mode, environment)
     now = datetime.now(timezone.utc)
-    date = now.astimezone(ZoneInfo(config["timezone"])).date().isoformat()
+    local_now = now.astimezone(ZoneInfo(config["timezone"]))
+    date = local_now.date().isoformat()
+    scheduled_send = mode == "send" and environment.get("LEVYQUANT_SCHEDULED_SEND") == "true"
+    if scheduled_send and local_now.hour < 7:
+        return {"mode": mode, "status": "scheduled_window_not_open", "date": date}
     output.mkdir(parents=True, exist_ok=True)
     if mode == "smtp-test":
         sender = config["sender"]
@@ -474,14 +502,6 @@ def run(config: dict, mode: str, environment: dict, output: Path, *, moomoo_sett
                                  encryption_key=environment["STATE_ENCRYPTION_KEY"])
         store.ensure_state_branch()
         claim_run_date(store, environment, date, now)
-        subscription_service = SubscriptionService(store, environment["STATE_ENCRYPTION_KEY"],
-                                                   environment["DIGEST_PUBLIC_BASE_URL"], now=now)
-        subscribers = recipients_from(environment["DIGEST_RECIPIENTS"])
-        internal = recipients_from(environment["DIGEST_INTERNAL_RECIPIENTS"])
-        eligible = subscription_service.delivery_recipients(subscribers, internal,
-            include_public_subscribers=environment.get("SUBSCRIPTIONS_ENABLED", "").lower() == "true")
-        # Retain legacy opt-outs as planned skips for an honest edition audit.
-        recipients = recipients_from(json.dumps(internal + subscribers + eligible))
     else:
         store = LocalStateStore(output / "preview-state")
     edition_path = "editions/" + date + ".json"
@@ -491,6 +511,21 @@ def run(config: dict, mode: str, environment: dict, output: Path, *, moomoo_sett
         if edition.get("mode") != ("live" if mode == "send" else "preview"):
             raise ConfigurationError("Stored edition mode does not match this run")
     history = store.load("history.json") or {"events": []}
+    if mode == "send":
+        if scheduled_send and edition is not None:
+            receipt = _completed_delivery_counts(edition)
+            if receipt is not None:
+                # Recover publication/history if an earlier run stopped after sending.
+                _publish_sent_edition(store, edition, history, now=now, history_days=config["history_days"])
+                return {"mode": mode, "status": "already_submitted_no_mail_sent", "date": date, **receipt}
+        subscription_service = SubscriptionService(store, environment["STATE_ENCRYPTION_KEY"],
+                                                   environment["DIGEST_PUBLIC_BASE_URL"], now=now)
+        subscribers = recipients_from(environment["DIGEST_RECIPIENTS"])
+        internal = recipients_from(environment["DIGEST_INTERNAL_RECIPIENTS"])
+        eligible = subscription_service.delivery_recipients(subscribers, internal,
+            include_public_subscribers=environment.get("SUBSCRIPTIONS_ENABLED", "").lower() == "true")
+        # Retain legacy opt-outs as planned skips for an honest edition audit.
+        recipients = recipients_from(json.dumps(internal + subscribers + eligible))
     if edition is None:
         sources = deepcopy(read_json(ROOT / config["source_manifest"])["sources"])
         snapshot = validate_moomoo_snapshot(moomoo_settings) if moomoo_settings is not None else None
@@ -600,12 +635,7 @@ def run(config: dict, mode: str, environment: dict, output: Path, *, moomoo_sett
     # At least one durable acceptance is sufficient to remember that these
     # public stories have appeared; an incomplete edition remains frozen for reruns.
     if receipt["accepted"]:
-        publish_latest(store, edition)
-        cutoff = (now - timedelta(days=config["history_days"])).date().isoformat()
-        current = {item["id"]: item for item in history["events"] if item.get("date", "") >= cutoff}
-        current.update({item["id"]: item for item in edition["events"]})
-        history["events"] = list(current.values())[-1000:]
-        store.save("history.json", history)
+        _publish_sent_edition(store, edition, history, now=now, history_days=config["history_days"])
     status = "all_submissions_accepted" if receipt["blocked_or_failed"] == 0 else "delivery_needs_attention"
     return {"mode": mode, "status": status, "date": date, **receipt}
 
@@ -660,9 +690,13 @@ def main(argv: list[str] | None = None) -> int:
     if report is not None:
         result["run_report_status"] = "unavailable"
         if report_store is not None:
+            # Keep persisted report codes compatible with existing dashboard deployments.
+            result_code = result["status"]
+            if result_code == "already_submitted_no_mail_sent":
+                result_code = "all_submissions_accepted"
             final = {**report, "updated_at": datetime.now(timezone.utc).isoformat(),
                      "status": "failed" if result["status"] in ("failed", "delivery_needs_attention") else "completed",
-                     "result_code": result["status"] if result["status"] in RESULT_CODES else "completed"}
+                     "result_code": result_code if result_code in RESULT_CODES else "completed"}
             final.update({key: result[key] for key in COUNT_FIELDS if type(result.get(key)) is int})
             if result["status"] == "failed":
                 final.update(error_type=result.get("error_type") if result.get("error_type") in ERROR_TYPES else "Exception",
