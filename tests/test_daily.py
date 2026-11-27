@@ -929,5 +929,44 @@ class RemoteStateTests(unittest.TestCase):
                 store.load("history.json")
 
 
+class ArchivePublicationTests(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.store = TestStore(Path(temporary.name))
+
+    def frozen(self, day="2026-11-26", text="Public base briefing"):
+        value = {"date": day, "edition_id": "levyquant-morning-" + day, "mode": "live", "validated": True,
+                 "subject": "Morning briefing " + day, "html": "<p>" + text + "</p>", "text": text,
+                 "events": [], "deliveries": {"private-recipient-hash": {"status": "accepted"}}}
+        value["content_sha256"] = daily.edition_fingerprint(value)
+        return value
+
+    def test_only_validated_live_frozen_copy_with_real_acceptance_can_be_published(self):
+        for changes in ({"mode": "preview"}, {"validated": False},
+                        {"deliveries": {}, "delivery_summary": {"accepted": 99}}, {"text": "tampered"}):
+            with self.subTest(changes=changes), patch.object(self.store, "save") as save:
+                with self.assertRaises(daily.ConfigurationError):
+                    daily.publish_latest(self.store, {**self.frozen(), **changes})
+                save.assert_not_called()
+
+    def test_daily_publication_archives_base_copy_and_keeps_first_body_immutable(self):
+        first = self.frozen()
+        daily.publish_latest(self.store, first)
+        saved = self.store.load("archive/editions/2026-11-26.json")
+        self.assertEqual(set(saved), {"date", "subject", "html", "text"})
+        self.assertNotIn("private-recipient-hash", json.dumps(saved))
+        daily.publish_latest(self.store, self.frozen(text="A later base revision"))
+        self.assertEqual(self.store.load("archive/editions/2026-11-26.json"), saved)
+        self.assertEqual(self.store.load("public/latest.json")["text"], "A later base revision")
+        self.assertEqual(self.store.load("archive/index.json"), {"schema_version": 1, "dates": ["2026-11-26"]})
+
+    def test_older_accepted_date_is_archived_without_replacing_newer_latest(self):
+        daily.publish_latest(self.store, self.frozen("2026-11-27"))
+        daily.publish_latest(self.store, self.frozen("2026-11-26"))
+        self.assertEqual(self.store.load("public/latest.json")["date"], "2026-11-27")
+        self.assertEqual(self.store.load("archive/index.json")["dates"], ["2026-11-27", "2026-11-26"])
+
+
 if __name__ == "__main__":
     unittest.main()

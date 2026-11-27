@@ -394,6 +394,60 @@
     deliveryEditionCompleted: '投递尝试已结束', deliveryWorkflowNeutral: '流程结束（中性结果）',
     deliveryWorkflowStale: '流程结果已过期', deliveryWorkflowStartupFailed: '流程未能启动'
   });
+  Object.assign(TEXT.en, {
+    archiveLink: 'Archive', archivePageTitle: 'LevyQuant — Published editions',
+    archiveDescription: 'Browse published LevyQuant briefings by month and search the full text of a selected month.',
+    archiveEyebrow: 'THE PUBLIC ARCHIVE', archiveHeading: 'Published editions',
+    archiveCopy: 'Browse published LevyQuant briefings by month, or search the full text of a selected month.',
+    archiveVersionNote: 'Each date keeps its first published edition.',
+    archiveFiltersLabel: 'Find a published edition', archiveMonthLabel: 'Month',
+    archiveQueryLabel: "Search this month's full text", archiveQueryPlaceholder: 'Company, topic or keyword',
+    archiveSearch: 'Search month', archiveSearchScope: 'Full-text search covers only the selected month. Leave the keyword blank to browse that month.',
+    archiveDateLabel: 'Or open an exact date', archiveOpenDate: 'Open date', archiveRetry: 'Reload archive',
+    archiveResultsEyebrow: 'PUBLISHED EDITIONS', archiveResultsHeading: 'Browse the archive',
+    archivePagesLabel: 'Archive result pages', archivePrevious: 'Previous', archiveNext: 'Next',
+    archiveReaderEyebrow: 'PUBLISHED BRIEFING', archiveShareLink: 'Link to this edition',
+    archivePreviewTitle: 'Published LevyQuant briefing', archiveLoadingMonths: 'Loading published months…',
+    archiveIndexUnavailable: 'The archive index is temporarily unavailable. Reload it to try again.',
+    archiveEmpty: 'No published editions are available yet.', archiveNoMonths: 'No published months',
+    archiveMonthsUnavailable: 'Months unavailable', archiveLoadingResults: 'Searching the selected month…',
+    archiveReadyPrompt: 'Choose a month and search to browse its published editions.',
+    archiveNoResults: 'No published editions match these filters in the selected month.',
+    archiveResultCount: 'Showing {first}–{last} of {total} published editions · {month}',
+    archiveSearchUnavailable: 'This month could not be searched. Please try again.',
+    archiveQueryInvalid: 'Enter a keyword of up to 100 characters without control characters.',
+    archiveMonthRequired: 'Choose a published month before searching.', archivePage: 'Page {page}',
+    archiveOpening: 'Opening the published edition…', archiveEditionNotFound: 'No published edition was found for this date.',
+    archiveEditionUnavailable: 'This published edition is temporarily unavailable. Please try again.',
+    archiveDateInvalid: 'Choose a valid calendar date.', archiveNoExcerpt: 'Open this edition to read the full briefing.'
+  });
+  Object.assign(TEXT.zh, {
+    archiveLink: '往期简报', archivePageTitle: 'LevyQuant｜往期简报',
+    archiveDescription: '按月浏览已公开的 LevyQuant 简报，并搜索所选月份的全文。',
+    archiveEyebrow: '公开简报归档', archiveHeading: '已公开的简报',
+    archiveCopy: '浏览已公开的 LevyQuant 晨间简报，按月查看，也可搜索所选月份的全文。',
+    archiveVersionNote: '每个日期保留首次公开版本。',
+    archiveFiltersLabel: '查找已公开的简报', archiveMonthLabel: '月份',
+    archiveQueryLabel: '搜索该月简报全文', archiveQueryPlaceholder: '公司、主题或关键词',
+    archiveSearch: '搜索该月', archiveSearchScope: '全文搜索仅覆盖所选月份；不填关键词即可浏览该月简报。',
+    archiveDateLabel: '或按准确日期打开', archiveOpenDate: '打开日期', archiveRetry: '重新加载归档',
+    archiveResultsEyebrow: '已公开的简报', archiveResultsHeading: '浏览往期简报',
+    archivePagesLabel: '归档结果分页', archivePrevious: '上一页', archiveNext: '下一页',
+    archiveReaderEyebrow: '公开简报全文', archiveShareLink: '本期分享链接',
+    archivePreviewTitle: 'LevyQuant 公开简报全文', archiveLoadingMonths: '正在加载归档月份…',
+    archiveIndexUnavailable: '暂时无法读取归档月份，请重新加载后重试。',
+    archiveEmpty: '目前还没有已公开的简报。', archiveNoMonths: '暂无归档月份',
+    archiveMonthsUnavailable: '月份暂不可用', archiveLoadingResults: '正在搜索所选月份…',
+    archiveReadyPrompt: '请选择月份并搜索，浏览该月已公开的简报。',
+    archiveNoResults: '所选月份没有符合条件的已公开简报。',
+    archiveResultCount: '{month} · 共 {total} 期，显示第 {first}–{last} 期',
+    archiveSearchUnavailable: '暂时无法搜索该月，请稍后重试。',
+    archiveQueryInvalid: '请输入不超过 100 个字符且不含控制字符的关键词。',
+    archiveMonthRequired: '搜索前请先选择归档月份。', archivePage: '第 {page} 页',
+    archiveOpening: '正在打开公开简报…', archiveEditionNotFound: '这个日期没有找到已公开的简报。',
+    archiveEditionUnavailable: '暂时无法读取这期公开简报，请稍后重试。',
+    archiveDateInvalid: '请选择有效的日历日期。', archiveNoExcerpt: '打开本期即可阅读全文。'
+  });
   const DELIVERY_COUNT_FIELDS = [
     ['recipient_count', 'deliveryPlanned'], ['accepted', 'deliveryAccepted'], ['rejected', 'deliveryRejected'],
     ['uncertain', 'deliveryUncertain'], ['reserved', 'deliveryReserved'], ['pending', 'deliveryPending'],
@@ -428,6 +482,10 @@
   let moomooSettings = emptyMoomooSettings();
   const currentMessages = new Map();
   const pendingSubscriberActions = new Set();
+  const archiveState = {months: [], month: '', query: '', date: '', results: null, selected: null,
+    indexLoading: true, indexError: '', searching: false, searchError: '', opening: false, openError: ''};
+  let archiveIndexSequence = 0, archiveSearchSequence = 0, archiveOpenSequence = 0;
+  let archiveSearchController = null, archiveOpenController = null;
   const view = {
     edition: null, signupEnabled: false, signupSubmitting: false, flow: null,
     subscribers: [], subscribersUnavailable: false, runs: [], runsUnavailable: false, adminStatus: null,
@@ -525,7 +583,9 @@
     $('flow-button').disabled = !flow.id || !flow.token || flow.busy || flow.completed;
   }
   function renderDynamic() {
-    if (document.body.dataset.page === 'admin') {
+    if (document.body.dataset.page === 'archive') {
+      renderArchive();
+    } else if (document.body.dataset.page === 'admin') {
       if (view.adminStatus) renderAdminStatus();
       renderSubscribers();
       renderDeliveryReport();
@@ -565,6 +625,170 @@
     frame.srcdoc = '<!doctype html>\n' + parsed.documentElement.outerHTML;
     frame.hidden = false;
     return true;
+  }
+  function validArchiveMonth(value) {
+    return typeof value === 'string' && /^[0-9]{4}-(0[1-9]|1[0-2])$/.test(value) && !value.startsWith('0000');
+  }
+  function validArchiveDate(value) {
+    if (typeof value !== 'string' || !/^[0-9]{4}-[0-9]{2}-[0-9]{2}$/.test(value) || value.startsWith('0000')) return false;
+    try { return new Date(value + 'T00:00:00Z').toISOString().slice(0, 10) === value; } catch { return false; }
+  }
+  function archiveMonths(values) {
+    if (!Array.isArray(values) || values.some(value => !validArchiveMonth(value))) throw errorFor('archiveIndexUnavailable');
+    return [...new Set(values)].sort().reverse();
+  }
+  function archiveMonthLabel(value) {
+    return new Intl.DateTimeFormat(language === 'zh' ? 'zh-CN' : 'en-US',
+      {year: 'numeric', month: 'long', timeZone: 'UTC'}).format(new Date(value + '-01T00:00:00Z'));
+  }
+  function archiveDateLabel(value) {
+    return new Intl.DateTimeFormat(language === 'zh' ? 'zh-CN' : 'en-US',
+      {year: 'numeric', month: 'short', day: 'numeric', timeZone: 'UTC'}).format(new Date(value + 'T00:00:00Z'));
+  }
+  function renderArchive() {
+    if (!$('archive-month')) return;
+    const state = archiveState;
+    const month = $('archive-month'); month.replaceChildren();
+    for (const value of state.months) {
+      const option = document.createElement('option'); option.value = value; option.textContent = archiveMonthLabel(value); month.append(option);
+    }
+    if (!state.months.length) {
+      const option = document.createElement('option'); option.value = '';
+      option.textContent = t(state.indexLoading ? 'archiveLoadingMonths' : state.indexError ? 'archiveMonthsUnavailable' : 'archiveNoMonths');
+      month.append(option);
+    }
+    month.value = state.month; month.disabled = state.indexLoading || !state.months.length;
+    if ($('archive-query').value !== state.query) $('archive-query').value = state.query;
+    if ($('archive-date').value !== state.date) $('archive-date').value = state.date;
+    $('archive-search-button').disabled = state.indexLoading || state.searching || !state.month;
+    $('archive-date-button').disabled = state.opening || !validArchiveDate(state.date);
+    $('archive-retry').hidden = !state.indexError || state.indexLoading;
+    message('archive-index-status', state.indexLoading ? 'archiveLoadingMonths' : state.indexError || (!state.months.length ? 'archiveEmpty' : ''), !!state.indexError);
+    const results = state.results, list = $('archive-results-list'); list.replaceChildren();
+    list.setAttribute('aria-busy', String(state.searching));
+    if (results) {
+      for (const item of results.items) {
+        const row = document.createElement('li'); row.className = 'archive-item';
+        const link = document.createElement('a'); link.className = 'archive-result-link';
+        link.href = '/archive?date=' + encodeURIComponent(item.date);
+        if (state.selected?.date === item.date) link.setAttribute('aria-current', 'date');
+        const date = document.createElement('time'); date.className = 'archive-result-date'; date.dateTime = item.date; date.textContent = archiveDateLabel(item.date);
+        const subject = document.createElement('span'); subject.className = 'archive-subject'; subject.textContent = item.subject;
+        link.append(date, subject);
+        link.addEventListener('click', event => {
+          if (event.button > 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+          event.preventDefault(); openArchiveEdition(item.date);
+        });
+        const excerpt = document.createElement('p'); excerpt.className = 'archive-excerpt'; excerpt.textContent = item.excerpt || t('archiveNoExcerpt');
+        row.append(link, excerpt); list.append(row);
+      }
+    }
+    const count = results?.items.length || 0;
+    const values = results ? {first: count ? (results.page - 1) * 10 + 1 : 0,
+      last: count ? (results.page - 1) * 10 + count : 0, total: results.total, month: archiveMonthLabel(results.month)} : {};
+    message('archive-results-status', state.searching ? 'archiveLoadingResults' : state.searchError ||
+      (results ? count ? 'archiveResultCount' : 'archiveNoResults' : state.indexLoading || !state.months.length ? '' : 'archiveReadyPrompt'), !!state.searchError, values);
+    $('archive-prev').disabled = state.searching || !results || results.page <= 1;
+    $('archive-next').disabled = state.searching || !results || !results.has_more;
+    $('archive-page').textContent = results ? t('archivePage', {page: results.page}) : '';
+    $('archive-reader-panel').hidden = !state.selected && !state.opening;
+    $('archive-reader-heading').textContent = state.selected?.subject || (state.opening ? t('archiveOpening') : '');
+    $('archive-reader-date').textContent = state.selected ? archiveDateLabel(state.selected.date) : '';
+    $('archive-share-link').hidden = !state.selected;
+    if (state.selected) $('archive-share-link').href = '/archive?date=' + encodeURIComponent(state.selected.date);
+    message('archive-open-status', state.opening ? 'archiveOpening' : state.openError, !!state.openError);
+  }
+  function archiveFiltersChanged() {
+    archiveSearchSequence += 1;
+    archiveSearchController?.abort(); archiveSearchController = null;
+    archiveState.searching = false; archiveState.searchError = ''; archiveState.results = null;
+    renderArchive();
+  }
+  async function loadArchiveIndex(preferredDate = '') {
+    const sequence = ++archiveIndexSequence;
+    archiveState.indexLoading = true; archiveState.indexError = ''; renderArchive();
+    let ready = false;
+    try {
+      const data = await api('/api/archive');
+      if (sequence !== archiveIndexSequence) return;
+      archiveState.months = archiveMonths(data.months);
+      if (!archiveState.months.includes(archiveState.month)) {
+        archiveState.month = archiveState.months.includes(preferredDate.slice(0, 7)) ? preferredDate.slice(0, 7) : archiveState.months[0] || '';
+      }
+      ready = true;
+    } catch (error) {
+      if (sequence !== archiveIndexSequence) return;
+      archiveState.indexError = error.status === 429 ? 'msgRateLimited' : 'archiveIndexUnavailable';
+    } finally {
+      if (sequence === archiveIndexSequence) { archiveState.indexLoading = false; renderArchive(); }
+    }
+    if (ready && sequence === archiveIndexSequence && archiveState.month) searchArchive(1);
+  }
+  async function searchArchive(page = 1) {
+    const month = archiveState.month, query = archiveState.query.trim();
+    if (!validArchiveMonth(month)) { archiveState.searchError = 'archiveMonthRequired'; renderArchive(); return; }
+    if (query.length > 100 || /[\x00-\x1f\x7f]/.test(query)) { archiveState.searchError = 'archiveQueryInvalid'; renderArchive(); return; }
+    const sequence = ++archiveSearchSequence;
+    archiveSearchController?.abort(); archiveSearchController = new AbortController();
+    archiveState.query = query; archiveState.searching = true; archiveState.searchError = ''; archiveState.results = null; renderArchive();
+    try {
+      const data = await api('/api/archive/search', {method: 'POST', signal: archiveSearchController.signal, body: {month, query, page}});
+      if (sequence !== archiveSearchSequence) return;
+      if (data.month !== month || data.page !== page || data.page_size !== 10 || !Number.isSafeInteger(data.total) || data.total < 0 ||
+          typeof data.has_more !== 'boolean' || !Array.isArray(data.items) || data.items.length > 10 || data.items.some(item =>
+            !item || !validArchiveDate(item.date) || item.date.slice(0, 7) !== month || typeof item.subject !== 'string' || typeof item.excerpt !== 'string')) {
+        throw errorFor('archiveSearchUnavailable');
+      }
+      archiveState.results = {month, query, page, total: data.total, has_more: data.has_more, items: data.items.map(item =>
+        ({date: item.date, subject: item.subject, excerpt: item.excerpt}))};
+    } catch (error) {
+      if (sequence !== archiveSearchSequence || error.name === 'AbortError') return;
+      archiveState.searchError = error.status === 429 ? 'msgRateLimited' : 'archiveSearchUnavailable';
+    } finally {
+      if (sequence === archiveSearchSequence) { archiveState.searching = false; renderArchive(); }
+    }
+  }
+  async function openArchiveEdition(date, scroll = true) {
+    if (!validArchiveDate(date)) { archiveState.openError = 'archiveDateInvalid'; renderArchive(); return; }
+    const sequence = ++archiveOpenSequence;
+    archiveOpenController?.abort(); archiveOpenController = new AbortController();
+    archiveState.date = date; archiveState.opening = true; archiveState.openError = ''; archiveState.selected = null;
+    $('archive-preview').srcdoc = ''; $('archive-preview').hidden = true; renderArchive();
+    try {
+      const data = await api('/api/archive/edition', {method: 'POST', signal: archiveOpenController.signal, body: {date}});
+      if (sequence !== archiveOpenSequence) return;
+      const edition = data.edition;
+      if (!edition || edition.date !== date || typeof edition.subject !== 'string' || typeof edition.text !== 'string' ||
+          typeof edition.html !== 'string' || !showPreview('archive-preview', edition)) throw errorFor('archiveEditionUnavailable');
+      archiveState.selected = {date, subject: edition.subject};
+      history.replaceState(null, '', '/archive?date=' + encodeURIComponent(date));
+      renderArchive();
+      if (scroll) {
+        $('archive-reader-heading').focus({preventScroll: true});
+        $('archive-reader-panel').scrollIntoView({block: 'start', behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth'});
+      }
+    } catch (error) {
+      if (sequence !== archiveOpenSequence || error.name === 'AbortError') return;
+      archiveState.openError = error.status === 404 ? 'archiveEditionNotFound' : error.status === 429 ? 'msgRateLimited' : 'archiveEditionUnavailable';
+    } finally {
+      if (sequence === archiveOpenSequence) { archiveState.opening = false; renderArchive(); }
+    }
+  }
+  function archivePage() {
+    $('archive-query').addEventListener('input', () => { archiveState.query = $('archive-query').value; archiveFiltersChanged(); });
+    $('archive-month').addEventListener('change', () => { archiveState.month = $('archive-month').value; archiveFiltersChanged(); });
+    $('archive-date').addEventListener('input', () => { archiveState.date = $('archive-date').value; renderArchive(); });
+    $('archive-search-form').addEventListener('submit', event => { event.preventDefault(); searchArchive(1); });
+    $('archive-date-form').addEventListener('submit', event => { event.preventDefault(); openArchiveEdition($('archive-date').value); });
+    $('archive-prev').addEventListener('click', () => { if (!archiveState.searching && archiveState.results?.page > 1) searchArchive(archiveState.results.page - 1); });
+    $('archive-next').addEventListener('click', () => { if (!archiveState.searching && archiveState.results?.has_more) searchArchive(archiveState.results.page + 1); });
+    $('archive-retry').addEventListener('click', () => loadArchiveIndex());
+    const shared = new URLSearchParams(location.search).get('date') || '';
+    loadArchiveIndex(validArchiveDate(shared) ? shared : '');
+    if (shared) {
+      if (validArchiveDate(shared)) openArchiveEdition(shared, false);
+      else { archiveState.openError = 'archiveDateInvalid'; renderArchive(); }
+    }
   }
   async function publicPage() {
     const path = location.pathname.replace(/\/$/, '');
@@ -1272,5 +1496,7 @@
     button.addEventListener('click', () => setLanguage(button.getAttribute('data-language'), true));
   }
   setLanguage(preferredLanguage());
-  if (document.body.dataset.page === 'admin') adminPage(); else publicPage();
+  if (document.body.dataset.page === 'archive') archivePage();
+  else if (document.body.dataset.page === 'admin') adminPage();
+  else publicPage();
 })();

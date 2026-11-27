@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="description" content="Browse published LevyQuant briefings by month and search the full text of a selected month." data-i18n-content="archiveDescription">
+  <title data-i18n="archivePageTitle">LevyQuant — Published editions</title>
+  <link rel="stylesheet" href="/static/app.css">
+  <script src="/static/app.js" defer></script>
+</head>
+<body data-page="archive">
+  <header class="site-header shell">
+    <a class="brand" href="/" aria-label="LevyQuant home" data-i18n-aria-label="brandHomeLabel"><span class="brand-mark">LQ</span> LevyQuant<span class="brand-dot">.</span></a>
+    <div class="header-actions">
+      <a class="nav-link" href="/#preview" data-i18n="latestEditionLink">Latest edition</a>
+      <a class="nav-link" href="/archive" aria-current="page" data-i18n="archiveLink">Archive</a>
+      <a class="nav-link" href="/admin" data-i18n="footerAdminLogin">Admin</a>
+      <nav class="language-switcher" aria-label="Interface language" data-i18n-aria-label="languageSwitcher">
+        <button type="button" data-language="zh" lang="zh-CN" aria-label="Switch to Chinese" data-i18n-aria-label="switchToChinese" aria-pressed="false">中文</button>
+        <button type="button" data-language="en" lang="en" aria-label="Switch to English" data-i18n-aria-label="switchToEnglish" aria-pressed="true">EN</button>
+      </nav>
+    </div>
+  </header>
+  <main class="shell archive-main">
+    <section class="archive-intro">
+      <p class="eyebrow" data-i18n="archiveEyebrow">THE PUBLIC ARCHIVE</p>
+      <h1 data-i18n="archiveHeading">Published editions</h1>
+      <p class="muted" data-i18n="archiveCopy">Browse published LevyQuant briefings by month, or search the full text of a selected month.</p>
+      <p class="small muted" data-i18n="archiveVersionNote">Each date keeps its first published edition.</p>
+    </section>
+    <section class="edition-card archive-controls" aria-label="Find a published edition" data-i18n-aria-label="archiveFiltersLabel">
+      <p id="archive-index-status" class="form-status archive-status" role="status" aria-live="polite"></p>
+      <button id="archive-retry" class="button secondary" type="button" data-i18n="archiveRetry" hidden>Reload archive</button>
+      <form id="archive-search-form" class="archive-search-form">
+        <div><label for="archive-month" data-i18n="archiveMonthLabel">Month</label><select id="archive-month" name="month" required disabled></select></div>
+        <div><label for="archive-query" data-i18n="archiveQueryLabel">Search this month's full text</label><input id="archive-query" name="query" type="search" maxlength="100" placeholder="Company, topic or keyword" data-i18n-placeholder="archiveQueryPlaceholder" aria-describedby="archive-search-scope" autocomplete="off"></div>
+        <button id="archive-search-button" class="button primary" type="submit" data-i18n="archiveSearch" disabled>Search month</button>
+      </form>
+      <p id="archive-search-scope" class="small muted" data-i18n="archiveSearchScope">Full-text search covers only the selected month. Leave the keyword blank to browse that month.</p>
+      <form id="archive-date-form" class="archive-date-form">
+        <div class="archive-date-field"><label for="archive-date" data-i18n="archiveDateLabel">Or open an exact date</label><input id="archive-date" name="date" type="date" required></div>
+        <button id="archive-date-button" class="button secondary" type="submit" data-i18n="archiveOpenDate">Open date</button>
+      </form>
+      <p id="archive-open-status" class="form-status archive-status" role="status" aria-live="polite"></p>
+    </section>
+    <div class="archive-layout">
+      <section class="edition-card archive-results" aria-labelledby="archive-results-heading">
+        <p class="eyebrow" data-i18n="archiveResultsEyebrow">PUBLISHED EDITIONS</p>
+        <h2 id="archive-results-heading" data-i18n="archiveResultsHeading">Browse the archive</h2>
+        <p id="archive-results-status" class="form-status archive-status" role="status" aria-live="polite"></p>
+        <ol id="archive-results-list" class="archive-results-list"></ol>
+        <nav class="archive-pagination" aria-label="Archive result pages" data-i18n-aria-label="archivePagesLabel">
+          <button id="archive-prev" class="button secondary" type="button" data-i18n="archivePrevious" disabled>Previous</button>
+          <span id="archive-page" class="quiet" aria-live="polite"></span>
+          <button id="archive-next" class="button secondary" type="button" data-i18n="archiveNext" disabled>Next</button>
+        </nav>
+      </section>
+      <section id="archive-reader-panel" class="edition-card archive-reader" aria-labelledby="archive-reader-heading" hidden>
+        <div class="section-top"><p class="eyebrow" data-i18n="archiveReaderEyebrow">PUBLISHED BRIEFING</p><span id="archive-reader-date" class="quiet"></span></div>
+        <h2 id="archive-reader-heading" tabindex="-1"></h2>
+        <p class="small muted content-language-note" data-i18n="contentLanguageNotice">Edition language: English.</p>
+        <a id="archive-share-link" class="text-link" href="/archive" data-i18n="archiveShareLink" hidden>Link to this edition</a>
+        <iframe id="archive-preview" class="digest-frame" title="Published LevyQuant briefing" data-i18n-title="archivePreviewTitle" sandbox="allow-popups allow-popups-to-escape-sandbox" hidden></iframe>
+      </section>
+    </div>
+  </main>
+  <footer class="site-footer shell"><span>LevyQuant · <span data-i18n="footerHabit">A daily reading habit.</span></span><span data-i18n="footerContext">Public sources. Original links. Clear context.</span></footer>
+</body>
+</html>

@@ -1,7 +1,7 @@
 """Hugging Face web entry point. This process never transports email."""
 from __future__ import annotations
 
-from collections import deque
+from collections import OrderedDict, deque
 from copy import deepcopy
 from datetime import date, datetime, timedelta, timezone
 from email import policy as email_policy
@@ -22,6 +22,7 @@ from urllib.request import HTTPRedirectHandler, Request, build_opener
 from zoneinfo import ZoneInfo
 
 from . import daily
+from . import archive
 from .admin_auth import AdminAuthService
 from .delivery_reports import read_run_reports, summarize_edition
 from .editor import EDITOR_ERROR_CODES, EditorError, EditorValidationError
@@ -182,6 +183,11 @@ class SpaceApplication:
         self._public_cache_at = 0.0
         self._public_limiter = _PublicRateLimiter()
         self._one_click_limiter = _PublicRateLimiter(global_limit=120, client_limit=60)
+        self._archive_limiter = _PublicRateLimiter(global_limit=30, client_limit=12)
+        self._archive_lock = threading.RLock()
+        self._archive_dates = None
+        self._archive_dates_at = 0.0
+        self._archive_bodies = OrderedDict()
 
     def _repository_valid(self) -> bool:
         return self.environment.get("GITHUB_REPOSITORY", REPOSITORY) == REPOSITORY
@@ -192,11 +198,15 @@ class SpaceApplication:
             raise AppError(503, "not_configured")
         return {**self.environment, "GITHUB_REPOSITORY": REPOSITORY}
 
-    def _new_store(self):
+    def _new_store(self, *, read_only=False):
         environment = self._remote_environment()
         store = self._store_factory() if self._store_factory else GitHubStateStore(
             REPOSITORY, environment["GITHUB_TOKEN"], encryption_key=environment["STATE_ENCRYPTION_KEY"])
-        store.ensure_state_branch()
+        if read_only:
+            if store.load("_state.json") != {"schema_version": 1, "encrypted_state": True}:
+                raise StateError("Existing encrypted state is required")
+        else:
+            store.ensure_state_branch()
         return store
 
     def _new_subscription_service(self):
@@ -440,6 +450,7 @@ class SpaceApplication:
             if self._preview_state["status"] != "ready" or self._generated_preview is None:
                 raise AppError(409, "validated_preview_required")
             preview = _preview_fields(deepcopy(self._generated_preview))
+        archive.publish_edition(self._new_store(), preview)
         for attempt in range(3):
             store = self._new_store()
             store.load(PUBLIC_PATH)
@@ -451,7 +462,113 @@ class SpaceApplication:
                     raise AppError(409, "state_conflict") from None
         with self._cache_lock:
             self._public_cache = None
+        with self._archive_lock:
+            self._archive_dates = None
         return {"status": "published", "date": preview["date"]}
+
+    def _archive_directory(self) -> list[str]:
+        with self._archive_lock:
+            if self._archive_dates is None or time.monotonic() - self._archive_dates_at >= 60:
+                self._archive_dates = archive.read_index(self._new_store(read_only=True))
+                self._archive_dates_at = time.monotonic()
+            return list(self._archive_dates)
+
+    def _archive_edition(self, day: str, *, store=None) -> dict:
+        with self._archive_lock:
+            if day in self._archive_bodies:
+                self._archive_bodies.move_to_end(day)
+                return deepcopy(self._archive_bodies[day])
+            value = archive.read_edition(store if store is not None else self._new_store(read_only=True), day)
+            if value is None:
+                raise archive.ArchiveError("Indexed archive snapshot is missing")
+            self._archive_bodies[day] = value
+            while len(self._archive_bodies) > 128:
+                self._archive_bodies.popitem(last=False)
+            return deepcopy(value)
+
+    def _archive_catalog(self) -> dict:
+        dates = self._archive_directory()
+        return {"months": sorted({day[:7] for day in dates}, reverse=True),
+                "latest_date": dates[0] if dates else None}
+
+    def _archive_search(self, body: dict) -> dict:
+        _body_fields(body, {"month", "query", "page"})
+        month = _string(body, "month", 7, empty=True)
+        query = _string(body, "query", 100, empty=True).strip()
+        page = body.get("page", 1)
+        if type(page) is not int or not 1 <= page <= 9007199254740991:
+            raise AppError(400, "invalid_request")
+        if month:
+            try:
+                archive.validate_date(month + "-01")
+            except archive.ArchiveError:
+                raise AppError(400, "invalid_request") from None
+        dates = self._archive_directory()
+        months = sorted({day[:7] for day in dates}, reverse=True)
+        selected_month = month or (months[0] if months else "")
+        selected = [day for day in dates if day.startswith(selected_month + "-")] if selected_month else []
+        if len(selected) > 31:
+            raise archive.ArchiveError("Archive month exceeds the supported date count")
+        matched = []
+        store = None
+        for day in selected:
+            with self._archive_lock:
+                if store is None and day not in self._archive_bodies:
+                    store = self._new_store(read_only=True)
+                edition = self._archive_edition(day, store=store)
+            if query and query.casefold() not in (edition["subject"] + "\n" + edition["text"]).casefold():
+                continue
+            plain = " ".join(edition["text"].split())
+            position = plain.casefold().find(query.casefold()) if query else 0
+            start = max(0, position - 70) if position >= 0 else 0
+            excerpt = ("…" if start else "") + plain[start:start + 240]
+            if start + 240 < len(plain):
+                excerpt += "…"
+            matched.append({"date": day, "subject": edition["subject"], "excerpt": excerpt})
+        offset = (page - 1) * 10
+        return {"month": selected_month, "query": query, "page": page, "page_size": 10,
+                "total": len(matched), "months": months, "items": matched[offset:offset + 10],
+                "has_more": offset + 10 < len(matched)}
+
+    def _archive_backfill(self, body: dict) -> dict:
+        _body_fields(body, {"cursor"})
+        cursor = _string(body, "cursor", 10, empty=True)
+        if cursor:
+            try:
+                archive.validate_date(cursor)
+            except archive.ArchiveError:
+                raise AppError(400, "invalid_request") from None
+        store = self._new_store()
+        days = store.list_edition_dates()
+        if not isinstance(days, list) or len(days) > archive.MAX_DATES:
+            raise archive.ArchiveError("Edition directory is invalid")
+        days = [archive.validate_date(day) for day in days]
+        if days != sorted(set(days)):
+            raise archive.ArchiveError("Edition directory is invalid")
+        latest = store.load(PUBLIC_PATH)
+        if latest is not None:
+            latest = archive.public_fields(latest)
+            days = sorted(set(days) | {latest["date"]})
+        remaining = [day for day in days if day > cursor]
+        batch = remaining[:31]
+        archived = 0
+        for day in batch:
+            frozen = store.load("editions/" + day + ".json")
+            snapshot = None
+            if isinstance(frozen, dict) and frozen.get("mode") == "live" and frozen.get("validated") is True:
+                daily.validate_frozen_edition(frozen, day)
+                if any(isinstance(record, dict) and record.get("status") == "accepted"
+                       for record in frozen["deliveries"].values()):
+                    snapshot = frozen
+            if snapshot is None and latest is not None and latest["date"] == day:
+                snapshot = latest
+            if snapshot is not None and archive.publish_edition(store, snapshot):
+                archived += 1
+        with self._archive_lock:
+            self._archive_dates = None
+        complete = len(remaining) <= 31
+        return {"processed": len(batch), "archived": archived, "skipped": len(batch) - archived,
+                "next_cursor": None if complete else batch[-1], "complete": complete}
 
     def handle_api(self, method: str, path: str, body: dict | None = None, *, authorization=None, client_id=""):
         """All exceptions crossing the HTTP boundary are replaced with codes."""
@@ -464,6 +581,25 @@ class SpaceApplication:
             self._public_limiter.check(client_id)
         if method == "GET" and path == "/api/public/preview":
             return 200, self.public_preview()
+        if ((method == "GET" and path == "/api/archive")
+                or (method == "POST" and path in ("/api/archive/search", "/api/archive/edition"))):
+            self._archive_limiter.check(client_id)
+            try:
+                if method == "GET":
+                    return 200, self._archive_catalog()
+                if path == "/api/archive/search":
+                    return 200, self._archive_search(body)
+                _body_fields(body, {"date"})
+                day = _string(body, "date", 10)
+                try:
+                    archive.validate_date(day)
+                except archive.ArchiveError:
+                    raise AppError(400, "invalid_request") from None
+                if day not in self._archive_directory():
+                    raise AppError(404, "archive_not_found")
+                return 200, {"edition": self._archive_edition(day)}
+            except StateError:
+                raise AppError(503, "archive_unavailable") from None
         if method == "POST" and path == "/api/one-click-unsubscribe":
             self._one_click_limiter.check(client_id)
             _body_fields(body, {"id", "token", "List-Unsubscribe"})
@@ -557,6 +693,8 @@ class SpaceApplication:
             return 200, self._admin_status()
         if method == "GET" and path == "/api/admin/delivery-report":
             return 200, self._delivery_report()
+        if method == "POST" and path == "/api/admin/archive/backfill":
+            return 200, self._archive_backfill(body)
         if path == "/api/admin/login-emails" and method in ("GET", "POST"):
             # Changing the administrator allowlist requires the independent
             # recovery credential, even when a temporary email session is valid.
@@ -681,6 +819,11 @@ class SpaceRequestHandler(BaseHTTPRequestHandler):
             raise AppError(400, "invalid_request")
         size = int(lengths[0])
         if size > MAX_BODY_BYTES:
+            # A tiny rejected body can already be in the receive buffer.
+            # Consume only this bounded case so closing the connection does
+            # not reset the response while unread request bytes remain.
+            if size == MAX_BODY_BYTES + 1:
+                self.rfile.read(size)
             raise AppError(413, "request_too_large")
         return size
 
@@ -693,6 +836,7 @@ class SpaceRequestHandler(BaseHTTPRequestHandler):
     def _json_body(self) -> dict:
         size = self._body_size()
         if self.headers.get_content_type() != "application/json":
+            self._body_bytes(size)
             raise AppError(415, "json_required")
         try:
             raw = self._body_bytes(size)
@@ -707,6 +851,7 @@ class SpaceRequestHandler(BaseHTTPRequestHandler):
         size = self._body_size()
         content_type = self.headers.get_content_type()
         if content_type not in ("application/x-www-form-urlencoded", "multipart/form-data"):
+            self._body_bytes(size)
             raise AppError(415, "form_required")
         raw = self._body_bytes(size)
         try:
@@ -779,6 +924,7 @@ class SpaceRequestHandler(BaseHTTPRequestHandler):
                      "/confirm": ("index.html", "text/html; charset=utf-8"),
                      "/unsubscribe": ("index.html", "text/html; charset=utf-8"),
                      "/admin": ("admin.html", "text/html; charset=utf-8"),
+                     "/archive": ("archive.html", "text/html; charset=utf-8"),
                      "/app.js": ("app.js", "text/javascript; charset=utf-8"),
                      "/app.css": ("app.css", "text/css; charset=utf-8"),
                      "/static/app.js": ("app.js", "text/javascript; charset=utf-8"),

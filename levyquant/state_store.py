@@ -7,6 +7,7 @@ through an independent secret; no remote operation accepts plaintext state.
 from __future__ import annotations
 
 import base64
+from datetime import date
 import json
 import hashlib
 import os
@@ -60,6 +61,19 @@ def _state_object(raw: bytes | str) -> dict:
     return value
 
 
+def _edition_day(path: str) -> str | None:
+    """Only ordinary date-named frozen editions belong in a backfill scan."""
+    match = re.fullmatch(r"editions/([0-9]{4}-[0-9]{2}-[0-9]{2})\.json", path)
+    if match:
+        try:
+            day = match.group(1)
+            if date.fromisoformat(day).isoformat() == day:
+                return day
+        except ValueError:
+            pass
+    return None
+
+
 class LocalStateStore:
     """Single-process local preview/tests only; production uses remote CAS."""
 
@@ -94,6 +108,21 @@ class LocalStateStore:
         temporary.write_text(content, encoding="utf-8")
         os.replace(temporary, path)
         self.versions[name] = content
+
+    def list_edition_dates(self) -> list[str]:
+        directory = self.root / "editions"
+        if directory.is_symlink():
+            raise StateError("Edition directory is not a regular directory")
+        if not directory.exists():
+            return []
+        if not directory.is_dir():
+            raise StateError("Edition directory is not a regular directory")
+        days = set()
+        for path in directory.glob("*.json"):
+            day = _edition_day("editions/" + path.name)
+            if day and path.is_file() and not path.is_symlink():
+                days.add(day)
+        return sorted(days)
 
 
 class GitHubStateStore:
@@ -242,6 +271,24 @@ class GitHubStateStore:
             raise StateError("Remote state version is missing")
         self.versions[name] = result["sha"]
         return state
+
+    def list_edition_dates(self) -> list[str]:
+        """Read filenames on the fixed state branch; never return private records."""
+        result = self._request("/git/trees/" + quote(self.branch, safe="") + "?recursive=1")
+        if (not isinstance(result, dict) or result.get("truncated") is not False
+                or not isinstance(result.get("tree"), list) or len(result["tree"]) > 100000):
+            raise StateError("Edition directory listing is incomplete")
+        days = set()
+        for entry in result["tree"]:
+            if not isinstance(entry, dict):
+                raise StateError("Edition directory listing is invalid")
+            path = entry.get("path")
+            if (entry.get("type") == "blob" and entry.get("mode") == "100644"
+                    and isinstance(path, str)):
+                day = _edition_day(path)
+                if day:
+                    days.add(day)
+        return sorted(days)
 
     def save(self, name: str, value: dict) -> None:
         _state_path(name)

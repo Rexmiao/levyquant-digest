@@ -18,6 +18,7 @@ from .delivery_reports import COUNT_FIELDS, ERROR_TYPES, RESULT_CODES, record_ru
 from .feeds import DIAGNOSTIC_STATUSES, collect_sources
 from .render import RECIPIENT_FOOTER_SLOT, _safe_url, render_digest
 from .smtp_delivery import DeliveryError, DeliveryUncertain, prepare_message, send_one
+from .archive import publish_edition
 from .sources import enrich_articles
 from .source_settings import (
     MOOMOO_SOURCE_ID, default_moomoo_queries, read_moomoo_settings, validate_moomoo_snapshot,
@@ -432,7 +433,13 @@ def deliver_edition(store, path: str, edition: dict, recipients: list[str], *, s
 
 def publish_latest(store, edition: dict) -> None:
     """Publish only the unpersonalized public edition, with bounded CAS retries."""
+    validate_frozen_edition(edition, edition.get("date"))
+    if (edition.get("mode") != "live" or edition.get("validated") is not True
+            or not any(isinstance(record, dict) and record.get("status") == "accepted"
+                       for record in edition["deliveries"].values())):
+        raise ConfigurationError("Only a validated live edition with accepted delivery can be published")
     value = {key: edition[key] for key in ("subject", "date", "html", "text")}
+    publish_edition(store, value)
     for attempt in range(3):
         current = store.load("public/latest.json")
         if current == value or (isinstance(current, dict) and current.get("date", "") > value["date"]):

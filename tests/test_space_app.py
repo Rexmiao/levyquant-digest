@@ -1,7 +1,7 @@
 """Offline web-boundary tests: no provider, GitHub or mail connection."""
 from contextlib import redirect_stderr, redirect_stdout
 from copy import deepcopy
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import http.client
 from io import StringIO
 import json
@@ -12,7 +12,7 @@ import time
 import unittest
 from unittest.mock import Mock, patch
 
-from levyquant import daily, space_app
+from levyquant import archive, daily, space_app
 from levyquant.delivery_reports import record_run_report
 from levyquant.editor import EditorError, EditorValidationError
 from levyquant.source_settings import SETTINGS_PATH
@@ -106,7 +106,7 @@ class AppTests(unittest.TestCase):
                 ("GET", "/api/admin/moomoo-settings"), ("POST", "/api/admin/moomoo-settings"),
                 ("GET", "/api/admin/login-emails"), ("POST", "/api/admin/login-emails"),
                 ("POST", "/api/admin/logout"), ("GET", "/api/admin/delivery-report"),
-                ("POST", "/api/admin/confirmation-status")):
+                ("POST", "/api/admin/confirmation-status"), ("POST", "/api/admin/archive/backfill")):
             with self.subTest(path=path):
                 self.assert_error(401, lambda: self.request(method, path, {}, authorization="Bearer wrong"))
         self.store_factory.assert_not_called()
@@ -546,11 +546,24 @@ class AppTests(unittest.TestCase):
     def test_publish_reloads_before_bounded_cas_retry(self):
         self.app._preview_state = {"status": "ready", "preview": deepcopy(PREVIEW)}
         self.app._generated_preview = deepcopy(PREVIEW)
-        self.store.save.side_effect = [StateConflict("offline conflict"), None]
+        latest_writes = 0
+        def first_latest_conflict(path, value):
+            nonlocal latest_writes
+            if path == space_app.PUBLIC_PATH:
+                latest_writes += 1
+                latest_reads = sum(call.args[0] == space_app.PUBLIC_PATH for call in self.store.load.call_args_list)
+                self.assertEqual(latest_reads, latest_writes)
+                if latest_writes == 1:
+                    raise StateConflict("offline conflict")
+            self.store._save(path, value)
+        self.store.save.side_effect = first_latest_conflict
         self.assertEqual(self.request("POST", "/api/admin/publish", {})[0], 200)
-        self.assertEqual(self.store.load.call_count, 2)
-        self.assertEqual(self.store_factory.call_count, 2)
-        self.store.save.side_effect = StateConflict("offline conflict")
+        self.assertEqual(latest_writes, 2)
+        def every_latest_conflict(path, value):
+            if path == space_app.PUBLIC_PATH:
+                raise StateConflict("offline conflict")
+            self.store._save(path, value)
+        self.store.save.side_effect = every_latest_conflict
         before = self.store.save.call_count
         self.assert_error(409, lambda: self.request("POST", "/api/admin/publish", {}))
         self.assertEqual(self.store.save.call_count - before, 3)
@@ -753,6 +766,181 @@ class RateLimiterTests(unittest.TestCase):
             thread.join()
         self.assertEqual(len(accepted), 20)
         self.assertLessEqual(len(limiter._clients), 256)
+
+
+class HttpBodyMetadataTests(unittest.TestCase):
+    def test_rejected_small_bodies_are_drained_but_huge_declared_length_is_never_read(self):
+        for size, content_type, method, status, expected_read in (
+            (space_app.MAX_BODY_BYTES + 1, "application/json", "_body_size", 413, space_app.MAX_BODY_BYTES + 1),
+            (space_app.MAX_BODY_BYTES + 2, "application/json", "_body_size", 413, None),
+            (1000000000, "application/json", "_body_size", 413, None),
+            (2, "text/plain", "_json_body", 415, 2),
+            (2, "application/json", "_one_click_body", 415, 2),
+        ):
+            with self.subTest(size=size, content_type=content_type, method=method):
+                handler = object.__new__(space_app.SpaceRequestHandler)
+                handler.headers = Mock()
+                handler.headers.get.return_value = None
+                handler.headers.get_all.return_value = [str(size)]
+                handler.headers.get_content_type.return_value = content_type
+                handler.rfile = Mock()
+                handler.rfile.read.return_value = b"x" * (expected_read or 0)
+                with self.assertRaises(space_app.AppError) as caught:
+                    getattr(handler, method)()
+                self.assertEqual(caught.exception.status, status)
+                if expected_read is None:
+                    handler.rfile.read.assert_not_called()
+                else:
+                    handler.rfile.read.assert_called_once_with(expected_read)
+
+
+class ArchiveAppTests(unittest.TestCase):
+    def setUp(self):
+        self.store = MemoryStore({"_state.json": {"schema_version": 1, "encrypted_state": True}})
+        self.app = space_app.SpaceApplication(ENV, store_factory=lambda: self.store)
+
+    def snapshot(self, day, text="Public briefing"):
+        return {"date": day, "subject": "Morning edition " + day, "html": "<p>" + text + "</p>", "text": text}
+
+    def frozen(self, day, *, mode="live", validated=True, accepted=True):
+        value = {**self.snapshot(day), "mode": mode, "validated": validated,
+                 "edition_id": "levyquant-morning-" + day, "events": [],
+                 "deliveries": {"private-hash": {"status": "accepted"}} if accepted else {},
+                 "delivery_summary": {"accepted": 999}}
+        value["content_sha256"] = daily.edition_fingerprint(value)
+        return value
+
+    def request(self, method, path, body=None, *, auth=None, client="archive-client"):
+        return self.app.handle_api(method, path, body, authorization=auth, client_id=client)
+
+    def assert_error(self, status, callback, code=None):
+        with self.assertRaises(space_app.AppError) as caught:
+            callback()
+        self.assertEqual(caught.exception.status, status)
+        if code:
+            self.assertEqual(caught.exception.code, code)
+
+    def test_public_archive_is_month_bounded_paginated_searchable_and_never_reads_private_editions(self):
+        for number in range(1, 13):
+            archive.publish_edition(self.store, self.snapshot(f"2026-11-{number:02d}",
+                "NVIDIA public results" if number == 11 else "Public briefing " + str(number)))
+        archive.publish_edition(self.store, self.snapshot("2026-10-01", "NVIDIA older month"))
+        self.store.values["editions/2026-11-27.json"] = self.frozen("2026-11-27", mode="preview")
+        self.store.load.reset_mock(); self.store.save.reset_mock()
+        with patch.object(daily, "run") as run, patch.object(daily, "send_one") as send:
+            self.assertEqual(self.request("GET", "/api/archive"),
+                (200, {"months": ["2026-11", "2026-10"], "latest_date": "2026-11-12"}))
+            _, first = self.request("POST", "/api/archive/search", {"month": "", "query": "", "page": 1})
+            self.assertEqual((first["month"], first["total"], len(first["items"]), first["has_more"]), ("2026-11", 12, 10, True))
+            _, second = self.request("POST", "/api/archive/search", {"month": "2026-11", "query": "", "page": 2})
+            self.assertEqual(([item["date"] for item in second["items"]], second["has_more"]), (["2026-11-02", "2026-11-01"], False))
+            _, found = self.request("POST", "/api/archive/search", {"month": "2026-11", "query": "nViDiA", "page": 1})
+            self.assertEqual((found["total"], found["items"][0]["date"]), (1, "2026-11-11"))
+            self.assertEqual(set(found["items"][0]), {"date", "subject", "excerpt"})
+            _, edition = self.request("POST", "/api/archive/edition", {"date": "2026-11-11"})
+            self.assertEqual(set(edition["edition"]), {"date", "subject", "html", "text"})
+            self.assertNotIn("private-hash", json.dumps(edition))
+            run.assert_not_called(); send.assert_not_called()
+        loaded = [call.args[0] for call in self.store.load.call_args_list]
+        self.assertFalse(any(path.startswith("editions/") for path in loaded))
+        self.assertNotIn("archive/editions/2026-10-01.json", loaded)
+        self.assertEqual(sum(path.startswith("archive/editions/") for path in loaded), 12)
+        self.store.save.assert_not_called(); self.store.ensure_state_branch.assert_not_called()
+
+    def test_empty_archive_is_distinct_from_unavailable_or_missing_date(self):
+        self.assertEqual(self.request("GET", "/api/archive"), (200, {"months": [], "latest_date": None}))
+        _, result = self.request("POST", "/api/archive/search", {"month": "", "query": "", "page": 1})
+        self.assertEqual((result["month"], result["total"], result["items"]), ("", 0, []))
+        self.assert_error(404, lambda: self.request("POST", "/api/archive/edition", {"date": "2026-11-26"}), "archive_not_found")
+        self.app._archive_dates = None
+        self.store.values["_state.json"] = {"schema_version": 1, "encrypted_state": False}
+        self.assert_error(503, lambda: self.request("GET", "/api/archive"), "archive_unavailable")
+        self.store.save.assert_not_called(); self.store.ensure_state_branch.assert_not_called()
+
+    def test_invalid_archive_parameters_are_rejected_before_store_reads(self):
+        cases = [("/api/archive/search", {"month": "2026-13", "query": "", "page": 1}),
+                 ("/api/archive/search", {"month": "2026-11", "query": "x" * 101, "page": 1}),
+                 ("/api/archive/search", {"month": "", "query": "", "page": True}),
+                 ("/api/archive/search", {"month": "", "query": "", "page": 0}),
+                 ("/api/archive/search", {"month": "", "query": "", "page": 1, "repository": "other"}),
+                 ("/api/archive/edition", {"date": "2026-02-30"}),
+                 ("/api/archive/edition", {"date": "../private"})]
+        for path, body in cases:
+            with self.subTest(path=path, body=body):
+                self.assert_error(400, lambda: self.request("POST", path, body))
+        self.store.load.assert_not_called()
+
+    def test_archive_limit_is_independent_and_precedes_store_initialization(self):
+        self.app._archive_limiter = space_app._PublicRateLimiter(global_limit=2, client_limit=2)
+        self.request("GET", "/api/archive"); self.request("GET", "/api/archive")
+        before = self.store.load.call_count
+        self.assert_error(429, lambda: self.request("GET", "/api/archive"))
+        self.assertEqual(self.store.load.call_count, before)
+        self.assertEqual(len(self.app._public_limiter._global), 0)
+
+    def test_catalog_ttl_and_body_lru_are_bounded_and_return_copies(self):
+        archive.publish_edition(self.store, self.snapshot("2026-11-26"))
+        self.store.load.reset_mock()
+        with patch.object(space_app.time, "monotonic", return_value=100):
+            self.request("GET", "/api/archive"); self.request("GET", "/api/archive")
+        self.assertEqual(sum(call.args[0] == archive.INDEX_PATH for call in self.store.load.call_args_list), 1)
+        with patch.object(space_app.time, "monotonic", return_value=161):
+            self.request("GET", "/api/archive")
+        self.assertEqual(sum(call.args[0] == archive.INDEX_PATH for call in self.store.load.call_args_list), 2)
+        days = [(datetime(2026, 1, 1) + timedelta(days=index)).date().isoformat() for index in range(129)]
+        for day in days:
+            self.store.values["archive/editions/" + day + ".json"] = self.snapshot(day)
+            value = self.app._archive_edition(day)
+            value["text"] = "must not poison cached public copy"
+        self.assertEqual(len(self.app._archive_bodies), 128)
+        self.assertNotIn(days[0], self.app._archive_bodies)
+        self.assertEqual(self.app._archive_edition(days[-1])["text"], "Public briefing")
+
+    def test_backfill_is_batched_resumable_prioritizes_accepted_and_preserves_sources(self):
+        days = [(datetime(2026, 10, 1) + timedelta(days=index)).date().isoformat() for index in range(35)]
+        for index, day in enumerate(days):
+            frozen = self.frozen(day, mode="preview" if index == 1 else "live", validated=index != 2, accepted=index != 3)
+            self.store.values["editions/" + day + ".json"] = frozen
+        # A later explicit publication cannot replace the accepted base body
+        # for the same date, even while the migration spans multiple batches.
+        self.store.values[space_app.PUBLIC_PATH] = self.snapshot(days[0], "Later explicitly published preview")
+        self.store.list_edition_dates = Mock(return_value=days)
+        before = deepcopy(self.store.values)
+        with patch.object(daily, "send_one") as send, patch.object(daily, "run") as run:
+            _, first = self.request("POST", "/api/admin/archive/backfill", {"cursor": ""}, auth=AUTH)
+            self.assertEqual(first, {"processed": 31, "archived": 28, "skipped": 3, "next_cursor": days[30], "complete": False})
+            self.assertEqual(archive.read_edition(self.store, days[0])["text"], "Public briefing")
+            self.assertIsNone(archive.read_edition(self.store, days[1]))
+            self.assertIsNone(archive.read_edition(self.store, days[2]))
+            self.assertIsNone(archive.read_edition(self.store, days[3]))
+            _, second = self.request("POST", "/api/admin/archive/backfill", {"cursor": first["next_cursor"]}, auth=AUTH)
+            self.assertEqual(second, {"processed": 4, "archived": 4, "skipped": 0, "next_cursor": None, "complete": True})
+            send.assert_not_called(); run.assert_not_called()
+        for path, value in before.items():
+            self.assertEqual(self.store.values[path], value)
+
+    def test_backfill_can_import_only_explicit_latest_and_rejects_tampered_frozen(self):
+        self.store.list_edition_dates = Mock(return_value=[])
+        self.store.values[space_app.PUBLIC_PATH] = {**self.snapshot("2026-11-26"), "provider_key": "private-not-projected"}
+        self.assertEqual(self.request("POST", "/api/admin/archive/backfill", {}, auth=AUTH)[1]["archived"], 1)
+        self.assertEqual(set(archive.read_edition(self.store, "2026-11-26")), set(archive.FIELDS))
+        frozen = self.frozen("2026-11-27")
+        frozen["text"] = "Changed without fingerprint acknowledgement"
+        self.store.values["editions/2026-11-27.json"] = frozen
+        self.store.list_edition_dates.return_value = ["2026-11-27"]
+        with self.assertRaises(daily.ConfigurationError):
+            self.request("POST", "/api/admin/archive/backfill", {"cursor": "2026-11-26"}, auth=AUTH)
+        self.assertIsNone(archive.read_edition(self.store, "2026-11-27"))
+
+    def test_private_preview_is_not_archived_until_explicit_publish_and_first_body_stays(self):
+        self.app._generated_preview = self.snapshot("2026-11-26", "First public draft")
+        self.app._preview_state = {"status": "ready"}
+        self.assertEqual(self.request("GET", "/api/archive")[1]["months"], [])
+        self.assertEqual(self.request("POST", "/api/admin/publish", {}, auth=AUTH)[0], 200)
+        self.app._generated_preview = self.snapshot("2026-11-26", "A later published revision")
+        self.request("POST", "/api/admin/publish", {}, auth=AUTH)
+        self.assertEqual(archive.read_edition(self.store, "2026-11-26")["text"], "First public draft")
+        self.assertEqual(self.store.values[space_app.PUBLIC_PATH]["text"], "A later published revision")
 
 
 if __name__ == "__main__":

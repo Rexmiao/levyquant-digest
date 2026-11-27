@@ -61,6 +61,19 @@ class FakeGitHub:
 
 
 class StateStoreTests(unittest.TestCase):
+    def test_date_listing_is_readonly_calendar_validated_and_does_not_read_contents(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            editions = root / "editions"
+            editions.mkdir()
+            for name in ("2026-11-27.json", "2026-11-26.json", "2026-02-31.json", "private.json"):
+                (editions / name).write_text("not even valid JSON", encoding="utf-8")
+            (editions / "nested").mkdir()
+            (editions / "nested/2026-11-25.json").write_text("private", encoding="utf-8")
+            store = LocalStateStore(root)
+            self.assertEqual(store.list_edition_dates(), ["2026-11-26", "2026-11-27"])
+            self.assertEqual(store.versions, {})
+
     def test_reservation_survives_later_failure_and_conflicting_writer_stops(self):
         with tempfile.TemporaryDirectory() as directory:
             one, two = LocalStateStore(directory), LocalStateStore(directory)
@@ -79,6 +92,21 @@ class StateStoreTests(unittest.TestCase):
 
 
 class EncryptedRemoteStateTests(unittest.TestCase):
+    def test_date_listing_only_uses_fixed_branch_regular_blobs_and_rejects_incomplete_tree(self):
+        store = self.store()
+        entries = [{"path": name, "type": "blob", "mode": "100644"} for name in (
+            "editions/2026-11-27.json", "editions/2026-11-26.json", "editions/2026-02-31.json",
+            "subscribers/2026-11-25.json", "editions/nested/2026-11-25.json", "public/latest.json")]
+        entries.append({"path": "editions/2026-11-24.json", "type": "blob", "mode": "120000"})
+        store._request = Mock(return_value={"tree": entries, "truncated": False})
+        self.assertEqual(store.list_edition_dates(), ["2026-11-26", "2026-11-27"])
+        store._request.assert_called_once_with("/git/trees/delivery-state?recursive=1")
+        self.assertEqual(store.versions, {})
+        for value in ({"tree": entries, "truncated": True}, {"tree": entries}, None):
+            store._request = Mock(return_value=value)
+            with self.assertRaises(StateError):
+                store.list_edition_dates()
+
     def setUp(self):
         self.api = FakeGitHub()
 
