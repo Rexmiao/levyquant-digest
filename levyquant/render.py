@@ -116,9 +116,29 @@ def _item_sources(item: dict, article_index: dict[str, dict]) -> list[tuple[str,
     return selected
 
 
-def render_digest(digest: dict, articles: list[dict]) -> tuple[str, str]:
-    """Return complete HTML and plain text without sending or writing files."""
-    language = "zh-CN" if _text(digest.get("language", "zh-CN")).lower().startswith("zh") else "en"
+def _digest_language(digest: dict) -> str:
+    return "zh-CN" if _text(digest.get("language", "zh-CN")).lower().startswith("zh") else "en"
+
+
+def _document_start(title: str, language: str) -> str:
+    return "".join([
+        '<!doctype html>',
+        f'<html lang="{language}"><head><meta charset="utf-8">',
+        '<meta name="viewport" content="width=device-width, initial-scale=1">',
+        f'<title>{escape(title, quote=True)}</title></head>',
+        '<body style="margin:0;padding:0;background-color:#ffffff;color:#202124;',
+        'font-family:Arial,Helvetica,sans-serif;">',
+        '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" ',
+        'style="width:100%;border-collapse:collapse;background-color:#ffffff;">',
+        '<tr><td align="center" style="padding:22px 16px;">',
+        '<table role="presentation" width="760" cellpadding="0" cellspacing="0" border="0" ',
+        'style="width:100%;max-width:760px;border-collapse:collapse;text-align:left;">',
+    ])
+
+
+def _render_digest_body(digest: dict, articles: list[dict]) -> tuple[list[str], list[str], set[str]]:
+    """Render trusted markup from escaped fields, excluding document and footer."""
+    language = _digest_language(digest)
     labels = _LABELS[language]
     title = _text(digest.get("title")) or "LevyQuant Daily"
     edition = _text(digest.get("edition"))
@@ -134,19 +154,7 @@ def render_digest(digest: dict, articles: list[dict]) -> tuple[str, str]:
         if isinstance(identifier, str) and identifier and identifier not in article_index:
             article_index[identifier] = article
 
-    html_parts = [
-        '<!doctype html>',
-        f'<html lang="{language}"><head><meta charset="utf-8">',
-        '<meta name="viewport" content="width=device-width, initial-scale=1">',
-        f'<title>{escape(title, quote=True)}</title></head>',
-        '<body style="margin:0;padding:0;background-color:#ffffff;color:#202124;',
-        'font-family:Arial,Helvetica,sans-serif;">',
-        '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" ',
-        'style="width:100%;border-collapse:collapse;background-color:#ffffff;">',
-        '<tr><td align="center" style="padding:22px 16px;">',
-        '<table role="presentation" width="760" cellpadding="0" cellspacing="0" border="0" ',
-        'style="width:100%;max-width:760px;border-collapse:collapse;text-align:left;">',
-    ]
+    html_parts = []
     text_parts = []
     if banner:
         html_parts.append(
@@ -254,12 +262,63 @@ def render_digest(digest: dict, articles: list[dict]) -> tuple[str, str]:
             text_parts.append(f"- {warning}")
         html_parts.append('</td></tr>')
         text_parts.append("")
+    return html_parts, text_parts, linked_ids
+
+
+def _render_document(body: str, text_parts: list[str], *, title: str, language: str,
+                     linked_ids: set[str], personalize: bool) -> tuple[str, str]:
+    labels = _LABELS[language]
     footer = f'LevyQuant · Macro, U.S. equities and quantitative research · {labels["source_count"]}: {len(linked_ids)}'
-    recipient_slot = RECIPIENT_FOOTER_SLOT if digest.get("footer_personalization") is True else ""
-    html_parts.append(
+    recipient_slot = RECIPIENT_FOOTER_SLOT if personalize else ""
+    footer_html = (
         '<tr data-digest-block="footer"><td style="padding:16px 0 0;border-top:1px solid #dadce0;'
         f'color:#70757a;font-size:12px;line-height:1.5;">{_html(footer)}{recipient_slot}</td></tr>'
         '</table></td></tr></table></body></html>'
     )
-    text_parts.append(footer)
-    return "".join(html_parts), "\n".join(text_parts).rstrip() + "\n"
+    return (_document_start(title, language) + body + footer_html,
+            "\n".join([*text_parts, footer]).rstrip() + "\n")
+
+
+def render_digest(digest: dict, articles: list[dict]) -> tuple[str, str]:
+    """Return complete HTML and plain text without sending or writing files."""
+    html_parts, text_parts, linked_ids = _render_digest_body(digest, articles)
+    return _render_document("".join(html_parts), text_parts,
+                            title=_text(digest.get("title")) or "LevyQuant Daily",
+                            language=_digest_language(digest), linked_ids=linked_ids,
+                            personalize=digest.get("footer_personalization") is True)
+
+
+def _bilingual_structure(digest: dict) -> list:
+    return [(section.get("id"), [item.get("source_ids", [])
+             for item in _records(section.get("items", []))])
+            for section in _records(digest.get("sections", []))]
+
+
+def render_bilingual_digest(english: dict, chinese: dict, articles: list[dict]) -> tuple[str, str]:
+    """Render full English then Chinese copies with one common recipient footer.
+
+    Translation/provenance validation belongs upstream. This boundary additionally
+    rejects mismatched edition metadata and ordered source-reference structures.
+    """
+    if (any(_text(english.get(key)) != _text(chinese.get(key)) for key in ("date", "cutoff", "mode"))
+            or _bilingual_structure(english) != _bilingual_structure(chinese)):
+        raise ValueError("Bilingual digests must share edition metadata and ordered source references.")
+    bodies, text_parts, linked_ids = [], [], set()
+    for digest, language, heading in ((english, "en", "English edition"),
+                                      (chinese, "zh-CN", "简体中文版")):
+        rows, lines, cited = _render_digest_body({**digest, "language": language}, articles)
+        bodies.append(
+            f'<tr><td lang="{language}" data-digest-language="{language}" style="padding:0;">'
+            '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" '
+            'style="width:100%;border-collapse:collapse;text-align:left;">'
+            '<tr><td style="padding:18px 0 0;color:#5f6368;font-size:13px;line-height:1.5;'
+            f'font-weight:700;">{heading}</td></tr>'
+            + "".join(rows) + '</table></td></tr>'
+        )
+        text_parts.extend([heading, "", *lines])
+        linked_ids.update(cited)
+    return _render_document("".join(bodies), text_parts,
+                            title=_text(english.get("title")) or "LevyQuant Daily",
+                            language="en", linked_ids=linked_ids,
+                            personalize=any(digest.get("footer_personalization") is True
+                                            for digest in (english, chinese)))

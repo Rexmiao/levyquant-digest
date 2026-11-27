@@ -125,6 +125,7 @@
   "heroPrice": "Free to read",
   "latestEditionEyebrow": "THE LATEST EDITION",
   "contentLanguageNotice": "Edition language: English.",
+  "contentBilingualNotice": "English edition followed by Simplified Chinese.",
   "previewPaperLabel": "LEVYQUANT / MORNING EDITION",
   "previewMacro": "Macro & policy",
   "previewEquities": "U.S. companies & sectors",
@@ -201,6 +202,7 @@
   "heroPrice": "免费阅读",
   "latestEditionEyebrow": "最新一期",
   "contentLanguageNotice": "本期正文：英文。",
+  "contentBilingualNotice": "本期正文先英文，后简体中文。",
   "previewPaperLabel": "LEVYQUANT / 晨间简报",
   "previewMacro": "宏观与政策",
   "previewEquities": "美股公司与行业",
@@ -600,8 +602,15 @@
     const frame = $(frameId);
     if (typeof preview?.html !== 'string' || !preview.html) return false;
     const parsed = new DOMParser().parseFromString(preview.html, 'text/html');
-    let coverage = parsed.querySelector('[data-digest-block="coverage"]')?.closest('tr');
-    if (!coverage) {
+    const hasChinese = Boolean(parsed.querySelector('[data-digest-language="zh-CN"]'));
+    const languageNote = frame.parentElement?.querySelector('.content-language-note');
+    if (languageNote) {
+      const label = hasChinese ? 'contentBilingualNotice' : 'contentLanguageNotice';
+      languageNote.setAttribute('data-i18n', label);
+      languageNote.textContent = t(label);
+    }
+    let coverage = hasChinese ? null : parsed.querySelector('[data-digest-block="coverage"]')?.closest('tr');
+    if (!hasChinese && !coverage) {
       const heading = Array.from(parsed.querySelectorAll('td > strong')).find(node =>
         ['Coverage notice', '资料覆盖提醒'].includes(node.textContent.trim()));
       coverage = heading?.closest('tr');

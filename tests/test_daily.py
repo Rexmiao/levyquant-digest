@@ -393,6 +393,39 @@ class InputAndPipelineTests(unittest.TestCase):
         self.assertEqual(value["content_sha256"], daily.edition_fingerprint(value))
         self.smtp.assert_not_called()
 
+    def test_bilingual_edition_is_frozen_archived_and_sent_once_per_recipient(self):
+        def translate(digest, **kwargs):
+            chinese = deepcopy(digest)
+            chinese.update(language="zh-CN", title="LevyQuant 晨间简报", edition="晨间版")
+            section = chinese["sections"][0]
+            section["title"] = "地缘、宏观与政策"
+            section["items"][0].update(title="政策公告", summary="该机构发布了政策公告。")
+            return chinese
+
+        config = {**self.config, "include_chinese_translation": True}
+        with patch("levyquant.daily.translate_digest", side_effect=translate) as translator:
+            result = daily.run(config, "send", self.environment, self.root / "outputs")
+        translator.assert_called_once()
+        self.assertEqual(result["accepted"], len(RECIPIENTS))
+        self.assertEqual(self.smtp.call_count, len(RECIPIENTS))
+        for call in self.smtp.call_args_list:
+            message = call.args[0]
+            for part in ("html", "plain"):
+                body = message.get_body(preferencelist=(part,)).get_content()
+                self.assertLess(body.index(QUOTE), body.index("该机构发布了政策公告。"))
+        store = TestStore(self.root / "remote")
+        frozen = store.load(PATH)
+        self.assertEqual(frozen["html"].count(RECIPIENT_FOOTER_SLOT), 1)
+        self.assertEqual(store.load("archive/editions/" + DATE + ".json")["html"], frozen["html"])
+
+    def test_translation_failure_does_not_freeze_or_send_an_english_only_edition(self):
+        config = {**self.config, "include_chinese_translation": True}
+        with patch("levyquant.daily.translate_digest", side_effect=daily.EditorError("offline translation failure")):
+            with self.assertRaisesRegex(daily.EditorError, "offline translation failure"):
+                daily.run(config, "send", self.environment, self.root / "outputs")
+        self.assertIsNone(TestStore(self.root / "remote").load(PATH))
+        self.smtp.assert_not_called()
+
     def test_send_uses_shared_keywords_only_on_fixed_source_and_freezes_revision(self):
         original, defaults = self.enable_moomoo_source()
         store = TestStore(self.root / "remote")
@@ -889,7 +922,14 @@ class InputAndPipelineTests(unittest.TestCase):
         result = daily.run(self.config, "send", {**self.environment, "GITHUB_RUN_ID": "124",
                            "LEVYQUANT_SCHEDULED_SEND": "true"}, self.root / "backup")
         self.assertEqual(result["status"], "already_submitted_no_mail_sent")
-        self.assertEqual(TestStore(self.root / "remote").load("public/latest.json")["date"], DATE)
+        store = TestStore(self.root / "remote")
+        published = store.load("public/latest.json")
+        self.assertEqual(published["date"], DATE)
+        manual_preview = {**published, "subject": "Explicitly published same-day preview"}
+        store.save("public/latest.json", manual_preview)
+        daily.run(self.config, "send", {**self.environment, "GITHUB_RUN_ID": "125",
+                  "LEVYQUANT_SCHEDULED_SEND": "true"}, self.root / "next-backup")
+        self.assertEqual(store.load("public/latest.json"), manual_preview)
         self.smtp.assert_not_called()
 
     def test_scheduled_check_retries_only_a_safe_failure_in_the_frozen_edition(self):

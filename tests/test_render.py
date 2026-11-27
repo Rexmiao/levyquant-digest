@@ -4,7 +4,7 @@ import copy
 from html.parser import HTMLParser
 import unittest
 
-from levyquant.render import RECIPIENT_FOOTER_SLOT, render_digest
+from levyquant.render import RECIPIENT_FOOTER_SLOT, render_bilingual_digest, render_digest
 
 
 class ParsedHTML(HTMLParser):
@@ -199,6 +199,127 @@ class RenderDigestTests(unittest.TestCase):
         self.assertNotIn("This briefing is sent", html + text)
         self.digest["footer_personalization"] = False
         self.assertNotIn(RECIPIENT_FOOTER_SLOT, render_digest(self.digest, self.articles)[0])
+
+    def bilingual_pair(self):
+        english = copy.deepcopy(self.digest)
+        english.update(language="en", title="LevyQuant Morning Briefing", footer_personalization=True,
+                       cutoff="2026-11-25T12:00:00Z", coverage_warnings=["English coverage limitation."])
+        english["sections"][0]["title"] = "MACRO CALENDAR"
+        english["sections"].append({"id": "quant_research", "title": "QUANT RESEARCH", "items": [{
+            "title": "English research item", "summary": "English research summary.",
+            "analysis": "English research analysis.", "source_ids": ["a2"],
+        }]})
+        chinese = copy.deepcopy(english)
+        chinese.update(language="zh-CN", title="LevyQuant 晨间简报", edition="晨间版",
+                       coverage_warnings=["中文资料覆盖说明。"])
+        chinese["sections"][0]["title"] = "宏观日历"
+        chinese["sections"][0]["items"][0].update(title="中文宏观条目", summary="中文宏观摘要。", analysis="中文宏观分析。")
+        chinese["sections"][1]["title"] = "量化研究"
+        chinese["sections"][1]["items"][0].update(title="中文研究条目", summary="中文研究摘要。", analysis="中文研究分析。")
+        articles = [*self.articles, dict(self.articles[0], id="a2", url="https://example.org/research")]
+        return english, chinese, articles
+
+    def test_bilingual_complete_copies_are_ordered_with_matching_citations_and_one_footer(self):
+        english, chinese, articles = self.bilingual_pair()
+        original = copy.deepcopy((english, chinese, articles))
+        html, text = render_bilingual_digest(english, chinese, articles)
+        parsed = ParsedHTML(html)
+        self.assertEqual((english, chinese, articles), original)
+        self.assertEqual(parsed.tags.count("html"), 1)
+        self.assertEqual(parsed.tags.count("head"), 1)
+        self.assertEqual(parsed.tags.count("body"), 1)
+        self.assertEqual(parsed.links, [article["url"] for article in articles] * 2)
+        self.assertIn(('data-digest-language', 'en'), parsed.attributes)
+        self.assertIn(('data-digest-language', 'zh-CN'), parsed.attributes)
+        self.assertIn('lang="zh-CN" data-digest-language="zh-CN"', html)
+        for output in (html, text):
+            self.assertLess(output.index("English edition"), output.index("English research summary."))
+            self.assertLess(output.index("English coverage limitation."), output.index("简体中文版"))
+            self.assertLess(output.index("简体中文版"), output.index("中文宏观摘要。"))
+            self.assertLess(output.index("中文宏观摘要。"), output.index("中文研究摘要。"))
+            self.assertLess(output.index("中文研究摘要。"), output.index("中文资料覆盖说明。"))
+            self.assertIn("Information cutoff: 2026-11-25 07:00 EST", output)
+            self.assertIn("资料截止: 2026-11-25 07:00 EST", output)
+            self.assertIn("Editorial analysis:", output)
+            self.assertIn("编辑分析:", output)
+            self.assertEqual(output.count("LevyQuant · Macro, U.S. equities and quantitative research"), 1)
+            self.assertIn("Source articles: 2", output)
+            self.assertNotIn("Source articles: 4", output)
+        self.assertEqual(html.count('data-digest-block="footer"'), 1)
+        self.assertEqual(html.count(RECIPIENT_FOOTER_SLOT), 1)
+        self.assertLess(html.index("中文资料覆盖说明。"), html.index(RECIPIENT_FOOTER_SLOT))
+        self.assertNotIn(RECIPIENT_FOOTER_SLOT, text)
+        self.assertNotIn("This briefing is sent", html + text)
+
+    def test_bilingual_escapes_both_languages_and_never_uses_model_urls(self):
+        english, chinese, articles = self.bilingual_pair()
+        payload = '<script>alert("unsafe")</script><img src=x onerror=alert(1)>'
+        english.update(title=payload, coverage_warnings=[payload])
+        chinese.update(title=payload, coverage_warnings=[payload])
+        for digest in (english, chinese):
+            digest["sections"][0]["title"] = payload
+            digest["sections"][0]["items"][0].update(title=payload, summary=payload + RECIPIENT_FOOTER_SLOT,
+                analysis=payload, url="https://model-invented.example/never-link")
+        articles[0].update(source=payload, published_at=payload, url="javascript:alert(1)")
+        articles.append(dict(articles[1], id="unused", url="https://unused.example/"))
+        html, text = render_bilingual_digest(english, chinese, articles)
+        parsed = ParsedHTML(html)
+        self.assertNotIn("script", parsed.tags)
+        self.assertNotIn("img", parsed.tags)
+        self.assertFalse(any(name.lower().startswith("on") for name, _ in parsed.attributes))
+        self.assertEqual(parsed.links, [articles[1]["url"]] * 2)
+        self.assertNotIn("model-invented.example", html + text)
+        self.assertNotIn("unused.example", html + text)
+        self.assertNotIn("javascript:", html + text)
+        self.assertEqual(html.count(RECIPIENT_FOOTER_SLOT), 1)
+        self.assertIn("&lt;script&gt;", html)
+        self.assertIn(payload, text)
+        self.assertIn("Source link missing or unverified", text)
+        self.assertIn("来源链接缺失或待核实", text)
+
+    def test_bilingual_rejects_mismatched_edition_or_reference_structure(self):
+        for change in ("date", "cutoff", "mode", "source_ids", "section_order", "missing_item"):
+            with self.subTest(change=change):
+                english, chinese, articles = self.bilingual_pair()
+                if change in ("date", "cutoff", "mode"):
+                    chinese[change] = "mismatch"
+                elif change == "source_ids":
+                    chinese["sections"][0]["items"][0]["source_ids"] = ["a2"]
+                elif change == "section_order":
+                    chinese["sections"].reverse()
+                else:
+                    chinese["sections"][1]["items"] = []
+                with self.assertRaisesRegex(ValueError, "share edition metadata and ordered source references"):
+                    render_bilingual_digest(english, chinese, articles)
+
+    def test_bilingual_demo_is_visible_in_both_copies_without_duplicate_recipient_slots(self):
+        english, chinese, articles = self.bilingual_pair()
+        english.update(mode="demo", cutoff="pending", date="YYYY-MM-DD", footer_personalization=False)
+        chinese.update(mode="demo", cutoff="pending", date="YYYY-MM-DD", footer_personalization=False)
+        for output in render_bilingual_digest(english, chinese, articles):
+            self.assertIn("DEMO TEMPLATE / NOT LIVE NEWS / DO NOT SEND", output)
+            self.assertIn("演示模板 / 非实时新闻 / 禁止发送", output)
+            self.assertIn("Information cutoff: pending", output)
+            self.assertIn("资料截止: pending", output)
+            self.assertNotIn(RECIPIENT_FOOTER_SLOT, output)
+
+    def test_bilingual_long_edition_keeps_last_item_of_each_complete_copy(self):
+        english, chinese, articles = self.bilingual_pair()
+        english["sections"] = [{"id": "quant_research", "title": "QUANT RESEARCH", "items": []}]
+        chinese["sections"] = [{"id": "quant_research", "title": "量化研究", "items": []}]
+        articles = []
+        for index in range(32):
+            articles.append(dict(self.articles[0], id=f"a{index}", url=f"https://example.org/article/{index}"))
+            english["sections"][0]["items"].append({"title": f"English item {index}", "summary": f"English summary {index}", "source_ids": [f"a{index}"]})
+            chinese["sections"][0]["items"].append({"title": f"中文条目 {index}", "summary": f"中文摘要 {index}", "source_ids": [f"a{index}"]})
+        html, text = render_bilingual_digest(english, chinese, articles)
+        self.assertEqual(len(ParsedHTML(html).links), 64)
+        for output in (html, text):
+            self.assertIn("English summary 31", output)
+            self.assertIn("中文摘要 31", output)
+            self.assertIn("Source articles: 32", output)
+            self.assertLess(output.index("English summary 31"), output.index("简体中文版"))
+        self.assertEqual(html.count(RECIPIENT_FOOTER_SLOT), 1)
 
 
 if __name__ == "__main__":

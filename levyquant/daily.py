@@ -13,10 +13,10 @@ import re
 import sys
 from zoneinfo import ZoneInfo
 
-from .editor import EditorError, editor_to_digest, generate_editor
+from .editor import EditorError, editor_to_digest, generate_editor, translate_digest
 from .delivery_reports import COUNT_FIELDS, ERROR_TYPES, RESULT_CODES, SUMMARY_FIELDS, record_run_report, summarize_edition
 from .feeds import DIAGNOSTIC_STATUSES, collect_sources
-from .render import RECIPIENT_FOOTER_SLOT, _safe_url, render_digest
+from .render import RECIPIENT_FOOTER_SLOT, _safe_url, render_bilingual_digest, render_digest
 from .smtp_delivery import DeliveryError, DeliveryUncertain, prepare_message, send_one
 from .archive import publish_edition
 from .sources import enrich_articles
@@ -85,6 +85,8 @@ def validate_config(config: dict) -> None:
         recipients_from(json.dumps([config["sender"]]))
     if config.get("timezone") != "America/New_York" or config.get("language") != "en":
         raise ConfigurationError("This deployment expects the confirmed New York / English configuration")
+    if type(config.get("include_chinese_translation", False)) is not bool:
+        raise ConfigurationError("The Chinese translation setting must be a boolean")
     if config.get("model") != FREE_MODEL:
         raise ConfigurationError("Model is not the reviewed free-tier candidate; no alternate model will be used")
     for name, minimum, maximum in (("lookback_hours", 1, 168), ("max_items_per_source", 1, 100),
@@ -431,7 +433,7 @@ def deliver_edition(store, path: str, edition: dict, recipients: list[str], *, s
     return {**summary, "blocked_or_failed": sum(summary[key] for key in ("rejected", "uncertain", "reserved", "pending"))}
 
 
-def publish_latest(store, edition: dict) -> None:
+def publish_latest(store, edition: dict, *, preserve_same_date: bool = False) -> None:
     """Publish only the unpersonalized public edition, with bounded CAS retries."""
     validate_frozen_edition(edition, edition.get("date"))
     if (edition.get("mode") != "live" or edition.get("validated") is not True
@@ -442,8 +444,12 @@ def publish_latest(store, edition: dict) -> None:
     publish_edition(store, value)
     for attempt in range(3):
         current = store.load("public/latest.json")
-        if current == value or (isinstance(current, dict) and current.get("date", "") > value["date"]):
+        if current == value:
             return
+        if isinstance(current, dict):
+            published_date = current.get("date", "")
+            if published_date > value["date"] or (preserve_same_date and published_date == value["date"]):
+                return
         try:
             store.save("public/latest.json", value)
             return
@@ -466,8 +472,9 @@ def _completed_delivery_counts(edition: dict) -> dict | None:
             "already_accepted": accepted, "blocked_or_failed": 0}
 
 
-def _publish_sent_edition(store, edition: dict, history: dict, *, now: datetime, history_days: int) -> None:
-    publish_latest(store, edition)
+def _publish_sent_edition(store, edition: dict, history: dict, *, now: datetime, history_days: int,
+                          preserve_same_date: bool = False) -> None:
+    publish_latest(store, edition, preserve_same_date=preserve_same_date)
     cutoff = (now - timedelta(days=history_days)).date().isoformat()
     current = {item["id"]: item for item in history["events"] if item.get("date", "") >= cutoff}
     current.update({item["id"]: item for item in edition["events"]})
@@ -516,7 +523,8 @@ def run(config: dict, mode: str, environment: dict, output: Path, *, moomoo_sett
             receipt = _completed_delivery_counts(edition)
             if receipt is not None:
                 # Recover publication/history if an earlier run stopped after sending.
-                _publish_sent_edition(store, edition, history, now=now, history_days=config["history_days"])
+                _publish_sent_edition(store, edition, history, now=now, history_days=config["history_days"],
+                                      preserve_same_date=True)
                 return {"mode": mode, "status": "already_submitted_no_mail_sent", "date": date, **receipt}
         subscription_service = SubscriptionService(store, environment["STATE_ENCRYPTION_KEY"],
                                                    environment["DIGEST_PUBLIC_BASE_URL"], now=now)
@@ -598,7 +606,12 @@ def run(config: dict, mode: str, environment: dict, output: Path, *, moomoo_sett
             notices, [article for article in public if article["id"] in cited],
             source_gaps=bool(warnings or enrichment_warnings), shortened=bool(context_warnings),
             extra_notices=[note for note in digest.get("coverage_warnings", []) if note not in notices])
-        html, text = render_digest(digest, public)
+        if config.get("include_chinese_translation"):
+            chinese = translate_digest(digest, api_key=environment["GEMINI_API_KEY"],
+                                       model=config["model"], max_output_tokens=config["max_output_tokens"])
+            html, text = render_bilingual_digest(digest, chinese, public)
+        else:
+            html, text = render_digest(digest, public)
         events = [{"id": a["canonical_id"], "title": a["title"], "summary": (a["summary"] or a["content"])[:600], "date": date}
                   for a in public if a["id"] in cited]
         edition = {"edition_id": "levyquant-morning-" + date, "date": date,

@@ -9,7 +9,7 @@ from urllib.error import HTTPError, URLError
 
 from levyquant.editor import (
     DEFAULT_MODEL, HEADLINE_ONLY_SUMMARY, EditorError, EditorValidationError, editor_to_digest,
-    generate_editor, load_editor_schema, validate_editor,
+    generate_editor, load_editor_schema, validate_editor, translate_digest, SECTION_IDS, SECTION_TITLES,
 )
 from levyquant.render import render_digest
 
@@ -423,6 +423,183 @@ class EditorTests(unittest.TestCase):
             with self.assertRaises(EditorError):
                 generate_editor(self.articles, api_key=self.key, max_output_tokens=99999, prompt="Digest")
             self.assertEqual(opened.call_count, 0)
+
+
+class TranslationTests(unittest.TestCase):
+    def setUp(self):
+        self.key = "offline-translation-key"
+        self.digest = {"language": "en", "title": "LevyQuant Morning Briefing", "edition": "Morning Edition",
+            "date": "2026-11-27", "cutoff": "2026-11-27T12:00:00Z", "mode": "live",
+            "sections": [{"id": "quant_research", "title": "QUANT RESEARCH", "items": [{
+                "title": "Method comparison", "summary": "Researchers use 120 observations.",
+                "analysis": "Further testing remains necessary.", "source_ids": ["original-source-id"],
+                "evidence": [{"source_id": "original-source-id", "quote": "Original English evidence."}],
+                "event_time": None}]}], "coverage_warnings": ["Feed excerpts only."]}
+        self.words = {"Method comparison": "方法比较", "Researchers use 120 observations.": "研究人员使用120个观测值。",
+                      "Further testing remains necessary.": "仍需进一步测试。", "Feed excerpts only.": "仅使用来源摘要。"}
+
+    def object_for(self, payload):
+        context = json.loads(payload["contents"][0]["parts"][0]["text"])
+        return {"translations": [{"key": row["key"], "text": self.words[row["text"]]} for row in context["texts"]]}
+
+    def answer(self, payload, *args):
+        return json.dumps(self.object_for(payload), ensure_ascii=False)
+
+    def translate(self, digest=None):
+        return translate_digest(self.digest if digest is None else digest, api_key=self.key,
+                                model=DEFAULT_MODEL, max_output_tokens=4096)
+
+    def test_structure_order_provenance_and_original_chinese_headline_are_preserved(self):
+        second = deepcopy(self.digest["sections"][0]["items"][0])
+        second["title"] = "已有中文标题 120"
+        second["source_ids"] = ["another-source"]
+        self.digest["sections"][0]["items"].append(second)
+        self.digest["sections"].append({"id": "watchlist", "title": "WATCHLIST", "items": []})
+        original = deepcopy(self.digest)
+        with patch("levyquant.editor._request_model", side_effect=self.answer) as model:
+            result = self.translate()
+        self.assertEqual(model.call_count, 1)
+        self.assertEqual(self.digest, original)
+        self.assertEqual((result["language"], result["title"], result["edition"]), ("zh-CN", "LevyQuant 晨间简报", "晨间版"))
+        self.assertEqual([section["id"] for section in result["sections"]], ["quant_research", "watchlist"])
+        self.assertEqual(result["sections"][1]["title"], SECTION_TITLES["zh-CN"][SECTION_IDS.index("watchlist")])
+        self.assertEqual(result["sections"][1]["items"], [])
+        for before, after in zip(original["sections"][0]["items"], result["sections"][0]["items"]):
+            for field in ("source_ids", "evidence", "event_time"):
+                self.assertEqual(after[field], before[field])
+        self.assertEqual(result["sections"][0]["items"][1]["title"], second["title"])
+        self.assertEqual(result["sections"][0]["items"][0]["summary"], "研究人员使用120个观测值。")
+        self.assertEqual(result["coverage_warnings"], ["仅使用来源摘要。"])
+        self.assertEqual((result["date"], result["cutoff"]), (original["date"], original["cutoff"]))
+        sent = json.dumps(model.call_args.args[0], ensure_ascii=False)
+        self.assertNotIn(second["title"], sent)
+        self.assertNotIn("Original English evidence", sent)
+        self.assertNotIn("original-source-id", sent)
+
+    def test_missing_reordered_duplicate_or_extra_output_never_returns_a_partial_digest(self):
+        for defect in ("missing", "reordered", "duplicate", "extra", "not_json"):
+            with self.subTest(defect=defect):
+                def invalid(payload, *args):
+                    value = self.object_for(payload)
+                    rows = value["translations"]
+                    if defect == "missing": rows.pop()
+                    elif defect == "reordered": rows.reverse()
+                    elif defect == "duplicate": rows[-1]["key"] = rows[0]["key"]
+                    elif defect == "extra": rows[0]["url"] = "https://invented.example"
+                    return "not JSON" if defect == "not_json" else json.dumps(value)
+                with patch("levyquant.editor._request_model", side_effect=invalid) as model:
+                    with self.assertRaises(EditorError) as caught:
+                        self.translate()
+                self.assertEqual(model.call_count, 2)
+                self.assertEqual(caught.exception.error_code, "translation_validation_failed")
+
+    def test_numeric_sign_percent_currency_and_scale_are_literal_not_reinterpreted(self):
+        source = "The rate is -2.5% and the total is $12 million."
+        self.digest["sections"][0]["items"][0]["summary"] = source
+        self.words[source] = "利率为 -2.5%，总额为 $12 million。"
+        with patch("levyquant.editor._request_model", side_effect=self.answer):
+            self.assertIn("$12 million", self.translate()["sections"][0]["items"][0]["summary"])
+        for wrong in ("利率为 2.5%，总额为 $12 million。", "利率为 -2.5，总额为 $12 million。",
+                      "利率为 -2.5%，总额为 $13 million。", "利率为 -2.5%，总额为 $12 billion。",
+                      "利率为 -2.5%，总额为 12 million。", "利率为 -2.5%，总额为 $12 million，另有3项。"):
+            with self.subTest(wrong=wrong):
+                def altered(payload, *args):
+                    value = self.object_for(payload)
+                    next(row for row in value["translations"] if row["key"].endswith(".summary"))["text"] = wrong
+                    return json.dumps(value)
+                with patch("levyquant.editor._request_model", side_effect=altered) as model:
+                    with self.assertRaises(EditorError): self.translate()
+                self.assertEqual(model.call_count, 2)
+
+    def test_original_iso_timestamp_and_renderer_event_suffix_are_preserved(self):
+        item = self.digest["sections"][0]["items"][0]
+        item["event_time"] = {"value": "2026-11-27T14:00:00Z", "precision": "datetime", "status": "confirmed"}
+        suffix = "\n2026-11-27 09:00 EST · datetime · confirmed"
+        item["summary"] += suffix
+        with patch("levyquant.editor._request_model", side_effect=self.answer) as model:
+            result = self.translate()
+        self.assertTrue(result["sections"][0]["items"][0]["summary"].endswith(suffix))
+        self.assertNotIn("2026-11-27 09:00 EST", json.dumps(model.call_args.args[0]))
+        source = "The record is timestamped 2026-11-27T14:00:00Z."
+        item.update(summary=source, event_time=None)
+        self.words[source] = "记录的时间戳是 2026-11-27T14:00:00Z。"
+        with patch("levyquant.editor._request_model", side_effect=self.answer):
+            self.assertIn("2026-11-27T14:00:00Z", self.translate()["sections"][0]["items"][0]["summary"])
+        self.words[source] = "记录的时间戳是 2026-11-27 14:00:00Z。"
+        with patch("levyquant.editor._request_model", side_effect=self.answer):
+            with self.assertRaises(EditorError): self.translate()
+
+    def test_new_links_html_or_unchanged_english_are_rejected_and_repair_uses_only_clean_input(self):
+        for wrong in ("方法 https://invented.example/private", "方法 invented.example", "<b>方法</b>",
+                      "&lt;script&gt;方法&lt;/script&gt;", "Method comparison"):
+            with self.subTest(wrong=wrong):
+                def invalid(payload, *args):
+                    value = self.object_for(payload)
+                    value["translations"][0]["text"] = wrong
+                    return json.dumps(value)
+                with patch("levyquant.editor._request_model", side_effect=invalid) as model:
+                    with self.assertRaises(EditorError): self.translate()
+                self.assertEqual(model.call_count, 2)
+        calls = []
+        def repaired(payload, *args):
+            calls.append(deepcopy(payload))
+            value = self.object_for(payload)
+            if len(calls) == 1:
+                value["translations"][0]["text"] = "错误 https://invented.example/private-marker"
+            return json.dumps(value)
+        with patch("levyquant.editor._request_model", side_effect=repaired):
+            self.assertEqual(self.translate()["language"], "zh-CN")
+        self.assertEqual(len(calls), 2)
+        self.assertNotIn("private-marker", json.dumps(calls[1]))
+        self.assertEqual(len(calls[1]["contents"]), 1)
+        self.assertIn("correction", json.loads(calls[1]["contents"][0]["parts"][0]["text"]))
+
+    def test_completely_empty_payload_skips_model_but_empty_edition_notices_are_translated(self):
+        empty = {"language": "en", "sections": [{"id": "quant_research", "title": "QUANT RESEARCH", "items": []}], "coverage_warnings": []}
+        with patch("levyquant.editor._request_model") as model:
+            result = translate_digest(empty, api_key="", model=DEFAULT_MODEL, max_output_tokens=4096)
+        model.assert_not_called()
+        self.assertEqual(result["language"], "zh-CN")
+        self.assertEqual(result["sections"][0]["title"], "量化研究")
+        empty["coverage_warnings"] = ["Feed excerpts only."]
+        with patch("levyquant.editor._request_model", side_effect=self.answer) as model:
+            result = self.translate(empty)
+        self.assertEqual(model.call_count, 1)
+        self.assertEqual(result["coverage_warnings"], ["仅使用来源摘要。"])
+
+    def test_real_request_wrapper_keeps_credentials_only_in_header_and_sends_no_metadata_or_links(self):
+        self.digest.update(recipient="private-reader@example.org", smtp_password="private-password",
+                           source_link="https://source.example/only-metadata")
+        def respond(req, **kwargs):
+            payload = json.loads(req.data)
+            body = {"candidates": [{"finishReason": "STOP", "content": {"parts": [{"text": self.answer(payload)}]}}]}
+            return BytesIO(json.dumps(body).encode())
+        with patch("levyquant.editor._OPEN", side_effect=respond) as opened:
+            self.translate()
+        self.assertEqual(opened.call_count, 1)
+        req = opened.call_args.args[0]
+        self.assertEqual(req.get_header("X-goog-api-key"), self.key)
+        self.assertNotIn(self.key, req.full_url)
+        for private in (self.key, "private-reader", "private-password", "source.example", "original-source-id", "Original English evidence"):
+            self.assertNotIn(private, req.data.decode())
+        payload = json.loads(req.data)
+        self.assertEqual(payload["generationConfig"]["maxOutputTokens"], 4096)
+        self.assertEqual(payload["generationConfig"]["responseMimeType"], "application/json")
+        self.assertIn("quoted strings", payload["systemInstruction"]["parts"][0]["text"])
+        self.assertNotIn("tools", payload)
+
+    def test_invalid_input_or_transport_errors_stop_without_provider_body_leaks(self):
+        invalid = deepcopy(self.digest)
+        invalid["sections"][0]["items"][0]["summary"] = "https://not-public-copy.example/path"
+        with patch("levyquant.editor._request_model") as model:
+            with self.assertRaises(EditorError) as caught: self.translate(invalid)
+        self.assertEqual(caught.exception.error_code, "translation_invalid_input")
+        model.assert_not_called()
+        with patch("levyquant.editor._OPEN", side_effect=URLError(self.key)) as opened:
+            with self.assertRaises(EditorError) as caught: self.translate()
+        self.assertEqual(opened.call_count, 1)
+        self.assertEqual(caught.exception.error_code, "model_network_error")
+        self.assertNotIn(self.key, str(caught.exception))
 
 
 if __name__ == "__main__":

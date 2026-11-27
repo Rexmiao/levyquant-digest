@@ -11,7 +11,7 @@ short_description: Macro, U.S. equities and quantitative research
 
 # LevyQuant Digest
 
-Public news preview, confirmed email subscriptions, unsubscribe controls, and a private owner administration page. The digest focuses on macroeconomics, U.S. equities, and quantitative research. Its main text is English, with original Chinese titles retained when relevant.
+Public news preview, confirmed email subscriptions, unsubscribe controls, and a private owner administration page. The digest focuses on macroeconomics, U.S. equities, and quantitative research. Each newly generated briefing presents English followed by Simplified Chinese.
 
 This package is prepared for deployment. The Hugging Face owner and Space name have not yet been selected, and no live launch URL has been verified. Replace the placeholders below with the actual Space values when deploying; the README itself is not evidence that a service is live.
 
@@ -88,6 +88,14 @@ The same fixed `subscription-mail.yml` also sends queued administrator sign-in c
 Visitors can read the currently published preview, request a subscription, confirm it, and unsubscribe. Anonymous requests cannot invoke the model, generate a new digest, or trigger a manual daily mailing. A generic request receipt is not proof that a confirmation email has arrived.
 
 The **中文 / EN** control switches the public and administrator interface, including subscription messages. Only that language preference is saved in browser storage; form entries and administrator credentials are not persisted by the switch. Published briefing content keeps its original language, identified beside the preview.
+
+### Bilingual briefing format
+
+Each email contains the complete English briefing followed by its Simplified Chinese translation. Both versions share the same items, source links, and verified numbers and dates in the same order. The website language control applies to the interface.
+
+Each new draft makes at most two translation attempts using the existing confirmed free-tier model. The bilingual draft must pass validation before sending. Timestamps with a known zone show the New York date and EST or EDT label. Date-only sources retain their original precision.
+
+Same-day retries reuse the frozen edition and its delivery records.
 
 The administrator opens **`/admin`**, requests a code for an address on the private administrator allowlist, and enters the emailed six-digit code. The code expires **10 minutes after the request** and is single-use. Do not forward or share it. A public subscription does not grant administrator access, and unknown addresses receive no administrator code. The allowlist is managed only through the dedicated recovery-credential interface; ordinary sign-in sessions cannot change it.
 

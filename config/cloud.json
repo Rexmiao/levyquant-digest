@@ -2,6 +2,7 @@
   "schema_version": 1,
   "title": "LevyQuant Morning Briefing",
   "language": "en",
+  "include_chinese_translation": true,
   "preserve_original_chinese_titles": true,
   "timezone": "America/New_York",
   "target_trigger_time": "07:00",
