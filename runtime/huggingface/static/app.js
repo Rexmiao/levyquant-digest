@@ -458,6 +458,30 @@
     archiveEditionUnavailable: '暂时无法读取这期公开简报，请稍后重试。',
     archiveDateInvalid: '请选择有效的日历日期。', archiveNoExcerpt: '打开本期即可阅读全文。'
   });
+  Object.assign(TEXT.en, {
+    navLatest: 'Latest', navSubscribe: 'Subscribe',
+    heroSubscribeCta: 'Get the morning briefing', heroReadCta: 'Read the latest edition',
+    highlightsHeading: 'Today’s highlights', readFullEdition: 'Read the full edition',
+    highlightsNoticeBilingual: 'A selection from this edition. The full briefing runs in English, followed by Simplified Chinese.',
+    highlightsNoticeEnglish: 'A selection from this edition. The full briefing is in English.',
+    highlightsMore: '+{count} more in the full edition',
+    skipToEdition: 'Skip to the latest edition', datelineCity: 'New York',
+    mastheadTagline: 'Macro · U.S. Equities · Quantitative Research', primaryNavLabel: 'Primary',
+    footerNavLabel: 'Footer', factWhenLabel: 'Delivered', factLanguageLabel: 'Languages',
+    factLanguageValue: 'English, then 简体中文', factPriceLabel: 'Price', leadLabel: 'Lead story'
+  });
+  Object.assign(TEXT.zh, {
+    navLatest: '最新一期', navSubscribe: '订阅',
+    heroSubscribeCta: '订阅晨间简报', heroReadCta: '阅读最新一期',
+    highlightsHeading: '本期要点', readFullEdition: '阅读本期全文',
+    highlightsNoticeBilingual: '节选自本期简报。完整版先英文，后简体中文。',
+    highlightsNoticeEnglish: '节选自本期简报。本期正文为英文。',
+    highlightsMore: '完整版另有 {count} 条',
+    skipToEdition: '跳到最新一期', datelineCity: '纽约',
+    mastheadTagline: '宏观 · 美股 · 量化研究', primaryNavLabel: '主导航',
+    footerNavLabel: '页脚导航', factWhenLabel: '送达', factLanguageLabel: '语言',
+    factLanguageValue: '先英文，后简体中文', factPriceLabel: '价格', leadLabel: '头条'
+  });
   const DELIVERY_COUNT_FIELDS = [
     ['recipient_count', 'deliveryPlanned'], ['accepted', 'deliveryAccepted'], ['rejected', 'deliveryRejected'],
     ['uncertain', 'deliveryUncertain'], ['reserved', 'deliveryReserved'], ['pending', 'deliveryPending'],
@@ -588,9 +612,19 @@
   function renderPublicState() {
     if (!$('signup-button')) return;
     const edition = view.edition;
-    $('edition-heading').textContent = t(edition ? 'publicEditionFallback' : 'publicPreviewEmptyHeading');
-    $('edition-date').textContent = edition?.date || t('comingSoon');
-    $('edition-notice').textContent = t(edition ? 'publicPreviewNotice' : 'publicPreviewPreparing');
+    const highlights = edition?.html ? editionHighlights(edition.html, language) : null;
+    const useHighlights = Boolean(highlights?.shown);
+    $('edition-heading').textContent = t(useHighlights ? 'highlightsHeading' : edition ? 'publicEditionFallback' : 'publicPreviewEmptyHeading');
+    $('edition-date').textContent = edition ? (validArchiveDate(edition.date) ? archiveDateLabel(edition.date) : edition.date || '') : t('comingSoon');
+    $('edition-notice').textContent = t(useHighlights ? (highlights.bilingual ? 'highlightsNoticeBilingual' : 'highlightsNoticeEnglish')
+      : edition ? 'publicPreviewNotice' : 'publicPreviewPreparing');
+    const languageNote = document.querySelector('#preview .content-language-note');
+    if (languageNote) languageNote.hidden = useHighlights;
+    if (useHighlights) renderHighlights(highlights);
+    $('edition-highlights').hidden = !useHighlights;
+    const fullLink = $('edition-full-link');
+    fullLink.hidden = !edition || !validArchiveDate(edition.date);
+    if (!fullLink.hidden) fullLink.href = '/archive?date=' + encodeURIComponent(edition.date);
     $('signup-button').disabled = !view.signupEnabled || view.signupSubmitting;
     $('signup-button').textContent = t(view.signupSubmitting ? 'signupSubmitting' : view.signupEnabled ? 'signupOpen' : 'signupClosed');
   }
@@ -602,7 +636,18 @@
     $('flow-button').textContent = t(flow.unsubscribe ? 'flowButtonUnsubscribe' : 'flowButtonConfirm');
     $('flow-button').disabled = !flow.id || !flow.token || flow.busy || flow.completed;
   }
+  function renderDateline() {
+    const node = $('masthead-date');
+    if (!node) return;
+    const now = new Date();
+    node.dateTime = new Intl.DateTimeFormat('en-CA', {timeZone: 'America/New_York'}).format(now);
+    node.textContent = new Intl.DateTimeFormat(language === 'zh' ? 'zh-CN' : 'en-US',
+      matchMedia('(max-width: 640px)').matches
+        ? {weekday: 'short', year: 'numeric', month: 'short', day: 'numeric', timeZone: 'America/New_York'}
+        : {weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', timeZone: 'America/New_York'}).format(now);
+  }
   function renderDynamic() {
+    renderDateline();
     if (document.body.dataset.page === 'archive') {
       renderArchive();
     } else if (document.body.dataset.page === 'admin') {
@@ -616,8 +661,117 @@
       renderFlow();
     }
   }
+  const HIGHLIGHT_LIMIT = 7, HIGHLIGHT_PER_SECTION = 3;
+  const highlightCache = new Map();
+  function safeSourceUrl(value) {
+    try {
+      const url = new URL(value);
+      return ['http:', 'https:'].includes(url.protocol) ? url.href : '';
+    } catch { return ''; }
+  }
+  function editionHighlights(html, lang) {
+    const cacheKey = lang + '\u0000' + html;
+    if (highlightCache.has(cacheKey)) return highlightCache.get(cacheKey);
+    // DOMParser documents are inert: scripts do not run and nothing is fetched.
+    const parsed = new DOMParser().parseFromString(html, 'text/html');
+    const chinese = parsed.querySelector('[data-digest-language="zh-CN"]');
+    const root = (lang === 'zh' && chinese) || parsed.querySelector('[data-digest-language="en"]') || parsed.body;
+    const sections = [];
+    let total = 0, shown = 0;
+    for (const heading of root.querySelectorAll('h2')) {
+      const cell = heading.closest('tr')?.nextElementSibling?.querySelector(':scope > td');
+      if (!cell) continue;
+      const items = [];
+      for (const block of cell.querySelectorAll(':scope > div')) {
+        const paragraphs = Array.from(block.querySelectorAll(':scope > p'));
+        const title = paragraphs.find(p => /font-weight:\s*bold/i.test(p.getAttribute('style') || ''));
+        if (!title || !title.textContent.trim()) continue;
+        total += 1;
+        if (items.length >= HIGHLIGHT_PER_SECTION || shown >= HIGHLIGHT_LIMIT) continue;
+        const summary = paragraphs.find(p => p !== title && !p.querySelector('strong, a') &&
+          !/font-size:\s*12px/i.test(p.getAttribute('style') || ''));
+        const anchor = Array.from(block.querySelectorAll('a[href]')).find(a => safeSourceUrl(a.getAttribute('href')));
+        const after = anchor?.nextSibling?.nodeType === Node.TEXT_NODE ? anchor.nextSibling.textContent : '';
+        const time = (after.match(/^\s*·\s*([^\n·]+)/) || [])[1] || '';
+        items.push({title: title.textContent.trim(), summary: summary?.textContent.trim() || '',
+          source: anchor ? {name: anchor.textContent.trim(), url: safeSourceUrl(anchor.getAttribute('href')), time: time.trim()} : null});
+        shown += 1;
+      }
+      if (items.length) sections.push({title: heading.textContent.trim(), items});
+    }
+    const result = {bilingual: Boolean(chinese), contentLang: chinese && root === chinese ? 'zh-CN' : 'en', sections, total, shown};
+    highlightCache.clear();
+    highlightCache.set(cacheKey, result);
+    return result;
+  }
+  function highlightStory(item, tag, className) {
+    const story = document.createElement(tag); story.className = className;
+    const title = document.createElement(tag === 'article' ? 'h3' : 'p'); title.className = 'highlight-title'; title.textContent = item.title;
+    story.append(title);
+    if (item.summary) {
+      const summary = document.createElement('p'); summary.className = 'highlight-summary'; summary.textContent = item.summary;
+      story.append(summary);
+    }
+    if (item.source) {
+      const source = document.createElement('p'); source.className = 'highlight-source';
+      const link = document.createElement('a'); link.href = item.source.url; link.target = '_blank'; link.rel = 'noopener noreferrer';
+      link.textContent = item.source.name || item.source.url;
+      source.append(link);
+      if (item.source.time) {
+        const time = document.createElement('span'); time.className = 'highlight-time'; time.textContent = item.source.time;
+        source.append(time);
+      }
+      story.append(source);
+    }
+    return story;
+  }
+  function renderHighlights(highlights) {
+    const container = $('edition-highlights');
+    const nodes = [];
+    const [first, ...others] = highlights.sections;
+    // The first item of the first section leads, front-page style.
+    const lead = highlightStory(first.items[0], 'article', 'lead-story');
+    const kicker = document.createElement('p'); kicker.className = 'lead-kicker';
+    const label = document.createElement('span'); label.textContent = t('leadLabel');
+    kicker.append(label, ' · ' + first.title);
+    lead.prepend(kicker);
+    nodes.push(lead);
+    const columns = document.createElement('div'); columns.className = 'front-columns';
+    for (const section of [{...first, items: first.items.slice(1)}, ...others]) {
+      if (!section.items.length) continue;
+      const block = document.createElement('section'); block.className = 'highlight-section';
+      const heading = document.createElement('h3'); heading.className = 'highlight-section-title'; heading.textContent = section.title;
+      const list = document.createElement('ol'); list.className = 'highlight-list';
+      for (const item of section.items) list.append(highlightStory(item, 'li', 'highlight-item'));
+      block.append(heading, list); columns.append(block);
+    }
+    if (columns.children.length) nodes.push(columns);
+    if (highlights.total > highlights.shown) {
+      const more = document.createElement('p'); more.className = 'highlight-more'; more.lang = document.documentElement.lang;
+      more.textContent = t('highlightsMore', {count: highlights.total - highlights.shown});
+      nodes.push(more);
+    }
+    container.lang = highlights.contentLang;
+    container.replaceChildren(...nodes);
+  }
+  function fitFrame(frame) {
+    try {
+      const doc = frame.contentDocument;
+      if (!doc?.documentElement || frame.hidden) return;
+      frame.style.height = '0px';
+      const borders = frame.offsetHeight - frame.clientHeight;
+      frame.style.height = Math.ceil(doc.documentElement.scrollHeight + borders) + 'px';
+      frame.classList.add('fitted');
+    } catch { /* A frame that cannot be measured keeps its stylesheet height. */ }
+  }
+  let fitTimer = null;
+  window.addEventListener('resize', () => {
+    clearTimeout(fitTimer);
+    fitTimer = setTimeout(() => document.querySelectorAll('iframe.digest-frame.fitted').forEach(fitFrame), 150);
+  });
   function showPreview(frameId, preview) {
     const frame = $(frameId);
+    frame.onload = () => fitFrame(frame);
     if (typeof preview?.html !== 'string' || !preview.html) return false;
     const parsed = new DOMParser().parseFromString(preview.html, 'text/html');
     const hasChinese = Boolean(parsed.querySelector('[data-digest-language="zh-CN"]'));
@@ -828,7 +982,12 @@
     $('archive-next').addEventListener('click', () => { if (!archiveState.searching && archiveState.results?.has_more) searchArchive(archiveState.results.page + 1); });
     $('archive-retry').addEventListener('click', () => loadArchiveIndex());
     const shared = new URLSearchParams(location.search).get('date') || '';
-    loadArchiveIndex(validArchiveDate(shared) ? shared : '');
+    loadArchiveIndex(validArchiveDate(shared) ? shared : '').then(() => {
+      // Without a shared date, open the newest edition so the reader is never empty.
+      if (shared || archiveState.selected || archiveState.opening) return;
+      const latest = (archiveState.results?.items || []).map(item => item.date).sort().pop();
+      if (latest) openArchiveEdition(latest, false);
+    });
     if (shared) {
       if (validArchiveDate(shared)) openArchiveEdition(shared, false);
       else { archiveState.openError = 'archiveDateInvalid'; renderArchive(); }
@@ -869,9 +1028,13 @@
     try {
       const data = await api('/api/public/preview');
       view.signupEnabled = data.signup_enabled === true;
-      if (data.available && showPreview('public-preview', data)) {
-        view.edition = {subject: data.subject, date: data.date};
-        $('preview-empty').hidden = true;
+      if (data.available && typeof data.html === 'string' && data.html) {
+        const highlights = editionHighlights(data.html, language);
+        // The full frame remains the fallback when no item structure is recognised.
+        if (highlights.shown || showPreview('public-preview', data)) {
+          view.edition = {subject: data.subject, date: data.date, html: highlights.shown ? data.html : ''};
+          $('preview-empty').hidden = true;
+        }
       }
     } catch { /* The landing page remains usable while the service starts. */ }
     renderPublicState();
