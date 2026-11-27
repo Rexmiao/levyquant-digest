@@ -6,8 +6,10 @@ can supply links; the renderer never turns model-supplied markup into HTML.
 
 from __future__ import annotations
 
+from datetime import datetime
 from html import escape
 from urllib.parse import urlsplit
+from zoneinfo import ZoneInfo
 
 RECIPIENT_FOOTER_SLOT = "<!--LEVYQUANT_RECIPIENT_FOOTER-->"
 
@@ -45,6 +47,22 @@ def _text(value: object) -> str:
     if value is None:
         return ""
     return str(value).replace("\r\n", "\n").replace("\r", "\n").strip()
+
+
+def format_new_york_time(value: object) -> str:
+    """Display a known instant in New York; preserve dates without a known offset."""
+    text = _text(value)
+    if not text or text.endswith(("-00:00", "-0000")):
+        return text
+    normalized = text[:-1] + "+00:00" if text.endswith("Z") else text
+    try:
+        instant = datetime.fromisoformat(normalized)
+        if instant.utcoffset() is None:
+            return text
+        local = instant.astimezone(ZoneInfo("America/New_York"))
+    except (ValueError, OverflowError):
+        return text
+    return local.strftime("%Y-%m-%d %H:%M %Z")
 
 
 def _html(value: object) -> str:
@@ -105,7 +123,7 @@ def render_digest(digest: dict, articles: list[dict]) -> tuple[str, str]:
     title = _text(digest.get("title")) or "LevyQuant Daily"
     edition = _text(digest.get("edition"))
     date = _text(digest.get("date"))
-    cutoff = _text(digest.get("cutoff")) or labels["not_provided"]
+    cutoff = format_new_york_time(digest.get("cutoff")) or labels["not_provided"]
     subtitle = " · ".join(part for part in (edition, date) if part)
     mode = _text(digest.get("mode")).lower()
     banner = labels["demo"] if mode == "demo" else labels["unknown_mode"] if mode != "live" else ""
@@ -191,7 +209,7 @@ def render_digest(digest: dict, articles: list[dict]) -> tuple[str, str]:
             has_link = False
             for identifier, article in _item_sources(item, article_index):
                 source_name = _text(article.get("source")) or _text(article.get("title")) or labels["source"]
-                published_at = _text(article.get("published_at"))
+                published_at = format_new_york_time(article.get("published_at"))
                 safe_url = _safe_url(article.get("url"))
                 timestamp = f" · {published_at}" if published_at else ""
                 if safe_url:

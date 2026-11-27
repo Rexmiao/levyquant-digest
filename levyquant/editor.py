@@ -17,7 +17,7 @@ import time
 import unicodedata
 from urllib import error, request
 
-from .render import _safe_url
+from .render import _safe_url, format_new_york_time
 
 
 DEFAULT_MODEL = "gemini-3.5-flash-lite"
@@ -503,7 +503,10 @@ def editor_to_digest(editor: object, articles: list[dict], *, date: str, cutoff:
             item = deepcopy(original)
             if item["event_time"] is not None:
                 event = item["event_time"]
-                item["summary"] += "\n" + " · ".join(event[key] for key in ("value", "precision", "status"))
+                event_value = event["value"]
+                if event["precision"] == "datetime":
+                    event_value = format_new_york_time(event_value)
+                item["summary"] += "\n" + " · ".join((event_value, event["precision"], event["status"]))
             items.append(item)
         sections.append({"id": section["id"], "title": SECTION_TITLES[language][SECTION_IDS.index(section["id"])], "items": items})
     notices = list(coverage_warnings or [])

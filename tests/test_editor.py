@@ -136,6 +136,22 @@ class EditorTests(unittest.TestCase):
         self.assertFalse(report["valid"])
         self.assertIn("event_time_not_upstream_verified", {error["code"] for error in report["errors"]})
 
+    def test_event_date_and_time_preserve_their_verified_precision(self):
+        section = self.editor["sections"][0]
+        section["id"] = "upcoming_events"
+        for value, precision, displayed in (
+            ("2026-11-26T01:30:00Z", "datetime", "2026-11-25 20:30 EST"),
+            ("2026-11-26", "day", "2026-11-26"),
+        ):
+            with self.subTest(precision=precision):
+                event = {"value": value, "precision": precision, "status": "confirmed"}
+                self.articles[0]["event_time"] = {**event, "evidence": self.quote}
+                section["items"][0]["event_time"] = event
+                digest = editor_to_digest(self.editor, self.articles, date="2026-11-25", cutoff="2026-11-25T12:00:00Z")
+                self.assertEqual(digest["sections"][0]["items"][0]["event_time"]["value"], value)
+                for output in render_digest(digest, self.articles):
+                    self.assertIn(f"{displayed} · {precision} · confirmed", output)
+
     def test_demo_adapter_is_unsendable_and_renderer_escapes_html(self):
         self.editor["sections"][0]["items"][0]["title"] = '<script>alert("unsafe")</script>'
         self.articles[0]["source"] = "<b>Publisher</b>"

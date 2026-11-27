@@ -145,12 +145,39 @@ class RenderDigestTests(unittest.TestCase):
     def test_actual_source_time_is_preserved_without_invented_edition(self):
         self.digest.update(language="en", edition="")
         html, text = render_digest(self.digest, self.articles)
-        self.assertIn(self.articles[0]["published_at"], html)
+        for output in (html, text):
+            self.assertIn("2026-11-25 06:20 EST", output)
         self.assertIn(self.articles[0]["source"], text)
         self.assertIn("Editorial analysis:", text)
         self.assertNotIn("Morning Edition", text)
         self.assertNotIn("DO NOT SEND", text)
         self.assertNotIn("agent-s", text)
+
+    def test_cutoff_and_source_times_use_new_york_date_and_dst_in_both_formats(self):
+        for cutoff, published, expected_cutoff, expected_published in (
+            ("2026-11-26T11:12:14.285001+00:00", "2026-11-26T01:00:00Z", "2026-11-26 06:12 EST", "2026-11-25 20:00 EST"),
+            ("2026-07-10T11:00:00Z", "2026-07-10T08:20:00+02:00", "2026-07-10 07:00 EDT", "2026-07-10 02:20 EDT"),
+            ("2026-11-01T06:30:00Z", "2026-11-01T05:30:00Z", "2026-11-01 01:30 EST", "2026-11-01 01:30 EDT"),
+        ):
+            with self.subTest(cutoff=cutoff, published=published):
+                self.digest.update(language="en", cutoff=cutoff)
+                self.articles[0]["published_at"] = published
+                for output in render_digest(self.digest, self.articles):
+                    self.assertIn("Information cutoff: " + expected_cutoff, output)
+                    self.assertIn(expected_published, output)
+                    self.assertNotIn(cutoff, output)
+                    self.assertNotIn(published, output)
+
+    def test_unqualified_times_are_not_given_a_new_york_offset(self):
+        for value in ("2026-11-26", "2026-11-26T07:00:00", "2026-11-26T07:00:00-00:00"):
+            with self.subTest(value=value):
+                self.digest["cutoff"] = value
+                self.articles[0]["published_at"] = value
+                for output in render_digest(self.digest, self.articles):
+                    self.assertIn("资料截止: " + value, output)
+                    self.assertEqual(output.count(value), 2)
+                    self.assertNotIn("EST", output)
+                    self.assertNotIn("EDT", output)
 
     def test_unconfigured_mode_is_marked_as_not_sendable(self):
         self.digest.pop("mode")
