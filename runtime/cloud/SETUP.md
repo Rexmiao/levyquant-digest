@@ -1,138 +1,140 @@
-# LevyQuant 云端日报：公开代码与加密状态
+# LevyQuant Cloud Digest: Public Code, Encrypted State
 
-使用 GitHub 托管运行器、Gemini API 免费层和 Gmail SMTP。运行时本机可以关机。个人公开仓库为 **Rexmiao/levyquant-digest**；真实发件邮箱、收件名单、密码和状态密钥均通过 GitHub Secrets 设置，不放进公开代码。
+**English** | [简体中文](https://github.com/Rexmiao/levyquant-digest/blob/main/README.zh-CN.md)
 
-## 1. 核对部署目标
+Runs on GitHub-hosted runners, the Gemini API free tier and Gmail SMTP. Your local machine can stay off while it runs. The personal public repository is **Rexmiao/levyquant-digest**. The real sender address, recipient lists, passwords and state key are all set through GitHub Secrets and are never placed in the public code.
 
-代码通过已有 GitHub 连接部署到个人名下的 **Public** 仓库 [Rexmiao/levyquant-digest](https://github.com/Rexmiao/levyquant-digest)。部署后确认默认分支存在 `.github/workflows/daily-digest.yml`。本流程不要求重新进行 GitHub CLI 登录、创建 PAT 或授予组织访问权限。
+## 1. Confirm the deployment target
 
-如需要手动上传备用包，使用按公开方案重新生成并核查过的 `outputs/levyquant-cloud-deploy.zip`，将包内文件放到仓库根目录。不要上传整个本机项目、n8n 数据库、OAuth token、私人邮件、日志、本机订阅文件或明文发送记录。
+Code is deployed through the existing GitHub connection to the personal **Public** repository [Rexmiao/levyquant-digest](https://github.com/Rexmiao/levyquant-digest). After deploying, confirm that `.github/workflows/daily-digest.yml` exists on the default branch. This process does not require a new GitHub CLI login, a new PAT or any organization access.
 
-**公开仓库的工作流日志、Summary、文件及提交历史可被他人查看。** Summary 只展示非敏感运行元数据，不展示全文草稿、实际邮箱、收件名单或密钥。日志中也不应打印这些内容；正文经过 HTML 转义仍然是公开内容，不能当成加密保护。[GitHub 日志访问说明](https://docs.github.com/en/rest/actions/workflow-runs)
+If you need to upload the fallback bundle by hand, use `outputs/levyquant-cloud-deploy.zip`, regenerated and reviewed under the public scheme, and place its files at the repository root. Do not upload the whole local project, the n8n database, OAuth tokens, private email, logs, local subscriber files or plaintext delivery records.
 
-## 2. 确认免费设置
+**Workflow logs, Summaries, files and commit history in a public repository are visible to anyone.** The Summary shows only non-sensitive run metadata, never full drafts, real addresses, recipient lists or keys. Logs must not print these either. HTML-escaped body text is still public content and is not a form of encryption. [GitHub log access](https://docs.github.com/en/rest/actions/workflow-runs)
 
-在 [Google AI Studio Projects](https://aistudio.google.com/projects) 找到准备使用的 API key 所属项目，查看 **Billing Tier**，确认仍为 **Free**，且未启用或绑定付费结算。只使用已确认的免费项目 key，不为本日报启用付费 billing。
+## 2. Confirm free-tier settings
 
-代码固定模型、限制调用并不切换付费备用模型，**但不能凭 API key 自动确认 Google 项目的收费状态**。必须由你在 AI Studio 核实，之后才能设置 `GEMINI_FREE_TIER_CONFIRMED=true`。免费层受模型、地区及配额限制，额度用完时允许任务停止，不自动升级。[Google 结算说明](https://aistudio.google.com/docs/billing)、[模型定价](https://aistudio.google.com/docs/pricing)
+In [Google AI Studio Projects](https://aistudio.google.com/projects), find the project that owns the API key you plan to use, check its **Billing Tier**, and confirm it is still **Free** with no paid billing enabled or linked. Use only keys from a confirmed free project, and do not enable paid billing for this digest.
 
-公开仓库使用标准 GitHub 托管运行器的计算用量免费；较大型运行器和其他收费项目另有规则。在 [GitHub 个人 Billing](https://github.com/settings/billing) → **Budgets and alerts** 为 Actions 设置 **$0 的额外支出预算**，并启用 **Stop usage when budget limit is reached**。仅设置提醒不会停止超额使用；仓库变量也不控制 GitHub 或 Google 的账单。[Actions 用量规则](https://docs.github.com/en/actions/concepts/billing-and-usage)、[预算设置](https://docs.github.com/en/billing/how-tos/set-up-budgets)
+The code pins the model, limits calls and never falls back to a paid model, **but it cannot tell from an API key alone whether a Google project is billed**. You must verify this in AI Studio before setting `GEMINI_FREE_TIER_CONFIRMED=true`. The free tier is limited by model, region and quota. When the quota runs out the job is allowed to stop; it never upgrades automatically. [Google billing](https://aistudio.google.com/docs/billing), [model pricing](https://aistudio.google.com/docs/pricing)
 
-## 3. 填写六个 Secrets、两个 Variables
+Standard GitHub-hosted runner minutes are free for public repositories; larger runners and other paid features follow separate rules. In [GitHub personal Billing](https://github.com/settings/billing) → **Budgets and alerts**, set a **$0 additional-spend budget** for Actions and enable **Stop usage when budget limit is reached**. An alert alone does not stop overage, and repository variables do not control GitHub or Google billing. [Actions usage](https://docs.github.com/en/actions/concepts/billing-and-usage), [budgets](https://docs.github.com/en/billing/how-tos/set-up-budgets)
 
-打开仓库 **Settings → Secrets and variables → Actions**。在 **Secrets** 页分别点 **New repository secret**，由你填写：
+## 3. Set six Secrets and two Variables
+
+Open the repository's **Settings → Secrets and variables → Actions**. On the **Secrets** tab, click **New repository secret** for each of the following and enter the value yourself:
 
 | Name | Value |
 | --- | --- |
-| `GEMINI_API_KEY` | 第 2 步已确认免费项目的 Gemini API key |
-| `SMTP_USERNAME` | 已确认的 Gmail 发件邮箱；不要把实际地址写进公开配置 |
-| `SMTP_APP_PASSWORD` | 该发件邮箱的 Google 应用专用密码 |
-| `DIGEST_RECIPIENTS` | 当前普通订阅名单的 JSON 数组，或逗号分隔地址；以后替换外部名单时修改这一项 |
-| `DIGEST_INTERNAL_RECIPIENTS` | 固定内部收件名单的 JSON 数组，或逗号分隔地址；始终保留，独立于普通订阅名单 |
-| `STATE_ENCRYPTION_KEY` | 独立生成的 32 字节随机密钥，以 URL-safe Base64 编码 |
+| `GEMINI_API_KEY` | The Gemini API key from the free project confirmed in step 2 |
+| `SMTP_USERNAME` | The confirmed Gmail sender address; do not write the real address into public config |
+| `SMTP_APP_PASSWORD` | A Google app password for that sender account |
+| `DIGEST_RECIPIENTS` | The current regular subscriber list as a JSON array or comma-separated addresses; change only this one when replacing the external list later |
+| `DIGEST_INTERNAL_RECIPIENTS` | The fixed internal recipient list as a JSON array or comma-separated addresses; always kept, independent of the regular list |
+| `STATE_ENCRYPTION_KEY` | A separately generated 32-byte random key, URL-safe Base64 encoded |
 
-两份名单分别保存在对应 Secret 中，实际地址不写进公开配置。格式示例仅使用占位地址：
+Each list lives in its own Secret and real addresses never go into public config. Format example, with placeholder addresses only:
 
 ```json
 ["you@example.com","another@example.com"]
 ```
 
-两项都支持这种 JSON 数组，也支持 `you@example.com,another@example.com`。正式 `send` 会合并两组，忽略大小写去重，再逐人投递；合并后的唯一地址总数最多 100。
+Both accept this JSON array form as well as `you@example.com,another@example.com`. A real `send` merges the two lists, de-duplicates case-insensitively and delivers one message per person; at most 100 unique addresses after merging.
 
-固定内部名单是正式发送的必需配置。`DIGEST_INTERNAL_RECIPIENTS` 缺失、为空或无效时，整轮发送会在任何网络操作前停止，避免漏掉内部收件人；普通 `DIGEST_RECIPIENTS` 也必须有效且非空。以后更换外部订阅名单只修改 `DIGEST_RECIPIENTS`，保留内部 Secret，因此内部收件人不会随外部名单替换而消失。不要把实际名单复制进公开代码、Issue、日志或 Summary。
+The fixed internal list is required for real sends. If `DIGEST_INTERNAL_RECIPIENTS` is missing, empty or invalid, the whole run stops before any network call so internal recipients are never skipped. The regular `DIGEST_RECIPIENTS` must also be valid and non-empty. When you replace the external list later, change only `DIGEST_RECIPIENTS` and keep the internal Secret, so internal recipients do not disappear with the external list. Never copy real lists into public code, Issues, logs or Summaries.
 
-`preview`、`preview-email`、`smtp-test` 不依赖这两份订阅名单。后两种自测投递仍只发送到 `SMTP_USERNAME` 对应邮箱，不会自动把内部或外部名单带入测试。
+`preview`, `preview-email` and `smtp-test` do not depend on either list. The latter two test deliveries go only to the `SMTP_USERNAME` mailbox and never pull in the internal or external lists.
 
-状态密钥须与 API key、邮箱密码分开生成。可在你自己的终端运行以下命令，输出只复制到 `STATE_ENCRYPTION_KEY` 并妥善私下保存，不发到聊天或提交进仓库：
+Generate the state key separately from the API key and mail password. You can run the command below in your own terminal; copy its output only into `STATE_ENCRYPTION_KEY` and keep it privately. Do not paste it into chat or commit it.
 
 ```powershell
 python -c "import base64,secrets; print(base64.urlsafe_b64encode(secrets.token_bytes(32)).decode())"
 ```
 
-切到 **Variables** 页，新增：
+Switch to the **Variables** tab and add:
 
-| Name | 初始 Value |
+| Name | Initial value |
 | --- | --- |
 | `DIGEST_ENABLED` | `false` |
-| `GEMINI_FREE_TIER_CONFIRMED` | 仅在第 2 步已实际确认后填 `true`，否则保持 `false` |
+| `GEMINI_FREE_TIER_CONFIRMED` | `true` only after you have actually confirmed step 2; otherwise keep `false` |
 
-密码和 key 只由你填写到 GitHub Secrets，不发到聊天。云端不会读取本机 n8n 中保存的密码。[GitHub Secrets 操作说明](https://docs.github.com/en/actions/how-tos/write-workflows/choose-what-workflows-do/use-secrets)
+Only you enter passwords and keys, directly into GitHub Secrets, never in chat. The cloud job does not read passwords stored in the local n8n. [Using GitHub Secrets](https://docs.github.com/en/actions/how-tos/write-workflows/choose-what-workflows-do/use-secrets)
 
-## 4. 验证预览与连接，再启用每日发送
+## 4. Verify previews and connectivity, then enable daily sends
 
-在 **Actions → LevyQuant Daily Digest → Run workflow** 选择默认分支，设置 `run_mode`：
+In **Actions → LevyQuant Daily Digest → Run workflow**, choose the default branch and set `run_mode`:
 
-1. **`preview`**：生成当日草稿，不发邮件。公开 Summary 只显示非敏感结果与统计，不显示全文；不要把公开日志当作草稿阅读入口。
-2. **`smtp-test`**：仅向 `SMTP_USERNAME` 对应的发件邮箱发送一封连接测试邮件。检查收件箱和垃圾邮件，确认云端 SMTP 可用；本机连接成功不能代替云端验证。
-3. **可选 `preview-email`**：仅当当前部署版本的下拉菜单已提供该模式时使用。由你手动选择后，向 `SMTP_USERNAME` 对应邮箱发送当日草稿，供私下检查完整分栏、来源与语言；不向订阅名单发送。没有这个选项时，不要假定该功能已经上线，可先通过本地预览检查正文。
-4. 云端检查完成后，将仓库 Variable **`DIGEST_ENABLED` 改为 `true`**。每日计划目标为 **America/New_York 当地时间 07:00**，自动跟随夏令时，按内部与普通订阅 Secret 合并后的名单逐人发送。
+1. **`preview`**: builds the day's draft without sending email. The public Summary shows only non-sensitive results and counts, not the full text; do not use public logs to read drafts.
+2. **`smtp-test`**: sends a single connectivity test only to the `SMTP_USERNAME` sender mailbox. Check the inbox and spam folder to confirm cloud SMTP works; a successful local connection does not prove the cloud path.
+3. **Optional `preview-email`**: use only if the deployed version's dropdown offers this mode. When you choose it manually, it sends the day's draft to the `SMTP_USERNAME` mailbox for a private check of layout, sources and languages; nothing goes to subscribers. If the option is absent, do not assume the feature is live; check the text with a local preview first.
+4. After the cloud checks, change the repository Variable **`DIGEST_ENABLED` to `true`**. The daily schedule targets **07:00 America/New_York local time**, follows daylight saving automatically and delivers one by one to the merged internal and regular lists.
 
-手动 `send` 模式会真实向内部与普通订阅合并名单发送当日稿件，同样受启用开关、密钥与发送记录检查约束。暂停日报时将 `DIGEST_ENABLED` 改回 `false`。日常无需每天手动点 Run workflow。
+Manual `send` mode really delivers the day's edition to the merged internal and regular lists, subject to the same enable switch, key and delivery-record checks. To pause the digest, set `DIGEST_ENABLED` back to `false`. There is no need to click Run workflow every day.
 
-## Hugging Face 公开订阅入口
+## Hugging Face public subscription portal
 
-可部署包与配置见 `runtime/huggingface/README.md`。HF 提供公开预览、邮箱确认订阅、退订和受服务端鉴权保护的 `/admin`；Gmail SMTP 和纽约 07:00 的日程继续由 GitHub 执行。
+The deployable bundle and configuration are described in `runtime/huggingface/README.md`. HF provides the public preview, email-confirmed subscription, unsubscribe and a server-authenticated `/admin`; Gmail SMTP and the 07:00 New York schedule still run on GitHub.
 
-准备好实际 Space 地址后，在本仓库 Variables 新增 `DIGEST_PUBLIC_BASE_URL=https://<owner>-<space>.hf.space`。确认 HF 与本仓库使用相同状态密钥和公开地址、且确认邮件工作流已部署，再将两端的 `SUBSCRIPTIONS_ENABLED` 设置为 `true`。这个开关控制公开注册和订阅确认邮件，已有退订及后台停用记录仍须在每日发送时过滤。
+Once the Space address is ready, add `DIGEST_PUBLIC_BASE_URL=https://<owner>-<space>.hf.space` to this repository's Variables. After confirming that HF and this repository use the same state key and public address and that the confirmation-mail workflow is deployed, set `SUBSCRIPTIONS_ENABLED` to `true` on both sides. This switch controls public sign-up and confirmation emails; existing unsubscribes and admin deactivations are still filtered at every daily send.
 
-启用后，普通名单与已确认的公开订阅合并，退订的外部地址被排除，固定内部名单始终保留。公开注册只先排队确认邮件；点击邮件里的确认按钮后才加入公开订阅。确认邮件在 GitHub 上执行，另有每小时队列恢复。单次提交成功不等于实际收到邮件。
+Once enabled, the regular list is merged with confirmed public subscribers, unsubscribed external addresses are excluded, and the fixed internal list is always kept. Public sign-up only queues a confirmation email; an address joins the public list only after the confirm button in that email is clicked. Confirmation emails run on GitHub, with an hourly queue recovery. A successful submission does not mean the email actually arrived.
 
-### 退订与投递看板
+### Unsubscribe and delivery dashboard
 
-非固定内部收件人的正式日报保留页尾退订链接，并增加 `List-Unsubscribe` 与 `List-Unsubscribe-Post: List-Unsubscribe=One-Click` 邮件头及专用退订 POST 接口。打开网页的 GET 请求不修改订阅状态，以免邮件扫描器误触发。Gmail 等邮箱是否显示顶部退订按钮由服务商决定；当前没有实证确认 Gmail 自动生成的 DKIM 签名覆盖这两个 `List-*` 邮件头，不能因此声称已完成 RFC 8058 签名验证或保证按钮显示。
+Real digests to anyone outside the fixed internal list keep the footer unsubscribe link and add `List-Unsubscribe` and `List-Unsubscribe-Post: List-Unsubscribe=One-Click` headers plus a dedicated unsubscribe POST endpoint. Opening the page with GET never changes subscription state, so mail scanners cannot trigger it. Whether Gmail or other providers show a top-of-message unsubscribe button is up to them. There is currently no evidence that Gmail's automatic DKIM signature covers these two `List-*` headers, so RFC 8058 signature compliance or button display is not claimed.
 
-普通邮箱退订或被后台停用后，即使仍在原 `DIGEST_RECIPIENTS` 中、即使关闭公开注册开关，也会被过滤；每位收件人发送前再次核查资格。已经提交给 SMTP 的邮件无法撤回，核查与提交之间的极短竞态也不能保证撤回。固定内部名单独立保留，不附公开退订入口，不受公开退订或后台停用移除；只有所有者明确更改内部配置才能取消。
+Once a regular address unsubscribes or is deactivated in the admin, it is filtered even if it is still in the original `DIGEST_RECIPIENTS` and even if public sign-up is switched off; eligibility is re-checked right before each recipient is sent. Mail already handed to SMTP cannot be recalled, and the very short race between the check and the submission cannot guarantee a recall either. The fixed internal list is kept separately, carries no public unsubscribe link and is not removed by public unsubscribes or admin deactivation; only an explicit owner change to the internal configuration removes it.
 
-私人后台投递看板区分 `send`、`preview`、`preview-email` 和 `smtp-test`。只有正式日报展示实际收件人提交统计，包括 accepted、rejected、uncertain、reserved、pending、因退订跳过、内部数量及本轮已存在的 accepted。accepted 仅表示 SMTP 接受，不证明进入收件箱。旧日报缺少完整人数快照时，未知总数、内部数及未处理人数显示为未知，不根据已有哈希记录猜测；旧 GitHub 运行没有模式标识时也不称为已发邮件。
+The private admin delivery dashboard distinguishes `send`, `preview`, `preview-email` and `smtp-test`. Only real digests show per-recipient submission counts: accepted, rejected, uncertain, reserved, pending, skipped due to unsubscribe, internal count and accepted already present in this run. Accepted means only that SMTP accepted the message, not that it reached the inbox. For older digests without a complete headcount snapshot, unknown totals, internal counts and unprocessed counts are shown as unknown rather than guessed from existing hash records; older GitHub runs without a mode marker are not described as sent emails.
 
-CLI 将最近 50 次安全运行元数据写入现有加密状态的 `reports/delivery-activity.json`，通过 CAS 合并运行记录，不包含邮箱、正文、URL、验证码或密钥。HF 私人预览不写这份 CLI 活动记录，后台结合最近 7 天真实日报状态与 GitHub 运行展示；报告写入失败不会触发重复投递。此功能复用现有凭据与 CPU Basic，无需新 Secret、权限、硬件或旧状态迁移。
+The CLI writes metadata for the latest 50 safe runs to `reports/delivery-activity.json` in the existing encrypted state, merging run records with CAS, and never includes addresses, body text, URLs, codes or keys. HF private previews do not write this CLI activity record; the admin combines the last 7 days of real digest state with GitHub runs. A failed report write never triggers a duplicate delivery. This feature reuses existing credentials and CPU Basic and needs no new Secret, permission, hardware or state migration.
 
-### 管理员邮箱验证码登录
+### Administrator email-code sign-in
 
-部署邮箱登录功能后，管理员在 `/admin` 输入已加入管理员允许名单的邮箱，再填写邮件中的 6 位验证码。验证码自请求起 10 分钟有效，只能使用一次；不要转发或分享。普通公开订阅不会授予管理员权限，管理员地址不写入公开配置或日志。允许名单由原有 `SPACE_ADMIN_TOKEN` 恢复凭据的专用管理接口维护，普通登录会话不能修改它。
+After the email sign-in feature is deployed, an administrator enters an allow-listed address at `/admin` and then the 6-digit code from the email. The code is valid for 10 minutes from the request and works only once; do not forward or share it. Public subscriptions never grant admin rights, and admin addresses are not written to public config or logs. The allow list is maintained through a dedicated admin endpoint protected by the original `SPACE_ADMIN_TOKEN` recovery credential; ordinary sign-in sessions cannot change it.
 
-验证码邮件与订阅确认邮件共用固定的 `subscription-mail.yml` 和现有 SMTP Secrets。`SUBSCRIPTIONS_ENABLED` 只控制订阅确认队列；允许名单内的管理员验证码独立处理，不需要新 Secret、额外权限或硬件。HF 不持有邮箱密码，也不通过 SMTP 直接发信。GitHub 排队可能延迟；已过期的验证码不补发，应在页面重新请求。
+Code emails share the fixed `subscription-mail.yml` and the existing SMTP Secrets with subscription confirmation emails. `SUBSCRIPTIONS_ENABLED` controls only the confirmation queue; codes for allow-listed administrators are processed independently and need no new Secret, extra permission or hardware. HF holds no mail password and never sends mail over SMTP directly. GitHub queuing may be delayed; expired codes are not resent, so request a new one on the page.
 
-邮箱验证码或恢复凭据验证成功后建立 1 小时管理员会话。浏览器通过安全、仅 HTTP 可读的 Cookie 恢复登录状态，刷新页面沿用原会话的有效期。退出会撤销服务端会话并清除 Cookie。恢复凭据仅用于验证。验证码、请求和会话的持久记录复用现有加密状态；worker 在预留成功后才投递，结果不确定或进程中断时不自动重发。
+A successful email code or recovery credential creates a one-hour administrator session. The browser restores the sign-in through a Secure, HttpOnly cookie, and a page refresh keeps the original session expiry. Signing out revokes the server-side session and clears the cookie. The recovery credential is used only for verification. Persistent records of codes, requests and sessions reuse the existing encrypted state; the worker delivers only after a successful reservation and never resends automatically when the outcome is uncertain or the process is interrupted.
 
-### 统一管理 Moomoo 检索关键词
+### Shared Moomoo search keywords
 
-部署含来源设置功能的版本后，在 HF 私人后台 `/admin` 修改并保存 Moomoo 关键词。设置写入现有 `delivery-state` 分支的 `settings/moomoo.json`，通过原有 `STATE_ENCRYPTION_KEY` 加密；HF 临时磁盘和浏览器存储不保存这份持久设置。GitHub 每日日报与 HF 新生成的预览读取同一份设置，`config/friend-sources.json` 仅提供首次未保存设置时的默认关键词。
+After deploying the version with source settings, change and save Moomoo keywords in the HF private admin at `/admin`. The setting is written to `settings/moomoo.json` on the existing `delivery-state` branch and encrypted with the original `STATE_ENCRYPTION_KEY`; neither HF's temporary disk nor browser storage keeps this persistent setting. The GitHub daily digest and newly generated HF previews read the same setting; `config/friend-sources.json` only supplies default keywords before anything has been saved.
 
-保存关键词不会自动生成预览或发送邮件。已经生成并冻结的当天正式版本保持原正文及发送记录；更新用于之后的新采集与新预览，不改写或重发当天已发送版本。Moomoo 仍只提供标题、来源时间和链接，不能据此扩写未取得的正文。此配置复用现有 GitHub token 与加密状态，不需要新增 Secret、权限或硬件；HF 保持 CPU Basic。
+Saving keywords does not generate a preview or send email. An official edition already generated and frozen for the day keeps its text and delivery records; the update applies to later collection and new previews and never rewrites or resends an edition already sent that day. Moomoo still provides only headlines, source times and links, which must not be expanded into text that was never obtained. This setting reuses the existing GitHub token and encrypted state and needs no new Secret, permission or hardware; HF stays on CPU Basic.
 
-### 加密状态与异常恢复
+### Encrypted state and recovery
 
-发送状态分支只保存 **AES-GCM 密文**，状态解密密钥来自 `STATE_ENCRYPTION_KEY`，不提交进该分支。收件人、发送记录及需要持久化的状态不得以明文发布。
+The delivery-state branch stores only **AES-GCM ciphertext**. The decryption key comes from `STATE_ENCRYPTION_KEY` and is never committed to that branch. Recipients, delivery records and any state that must persist are never published in plaintext.
 
-若密钥缺失、错误或状态完整性验证失败，投递应停止，保留原有密文供恢复，不能把解密失败当作首次运行或空白历史继续发送。不要随意删除、重建状态分支或更换密钥；换钥需要使用旧密钥解密后进行受控迁移，不能只替换 Secret。
+If the key is missing or wrong, or state integrity verification fails, delivery must stop and the existing ciphertext must be kept for recovery; a decryption failure must never be treated as a first run or empty history. Do not casually delete or rebuild the state branch or change the key. Rotating the key requires a controlled migration that decrypts with the old key; replacing the Secret alone is not enough.
 
-如果执行报告投递结果不确定，先在邮箱中核对发件记录，再处理状态；不要连续重跑尝试补发。SMTP 接受不等于一定进入对方收件箱，固定 Message-ID 也不是 Gmail 的自动去重保证。
+If a run reports an uncertain delivery outcome, check the sent mail first and then deal with state; do not re-run repeatedly to resend. SMTP acceptance does not guarantee inbox delivery, and a fixed Message-ID is not a Gmail de-duplication guarantee.
 
-## 运行边界
+## Operating limits
 
-- **时间**：每天按纽约当地时间 07:00 启动主任务，07:20 和 08:10 执行备用检查。已完成的日报跳过发信。当天缺稿时，备用任务生成并发送；部分投递失败时使用当天的冻结稿，只补发可以安全重试的邮件。已接受或结果不确定的邮件不会重发。三个触发点均使用 GitHub Actions，因此同一平台的故障可能同时影响它们。工作流须在默认分支，公开仓库 60 天没有活动时定时工作流可能自动停用。[调度说明](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#schedule)
-- **内容**：新双语稿在同一封邮件中先提供英文全文，再提供逐项对应的简体中文全文，采用完整分栏，重点为宏观、美股与量化研究，综合新闻只收重大事项。默认 `config/friend-sources.json` 包含21个来源：Fed、BLS、SEC、arXiv、NVIDIA 等官方来源，CNBC、WSJ、SCMP、Digitimes、雷峰网、爱范儿的公开订阅源，以及朋友邮件中的5个播客。另有 Moomoo 官方 News Search，默认检索 NVIDIA、Microsoft 与 Federal Reserve，按时间选取最多6条候选；仅保留标题、明确的来源时间和原始链接。媒体只用feed提供的标题/节选，播客只用节目介绍，不下载音频；这不是完整市场覆盖。Reuters授权内容、Finnhub日历、实时行情、一致预期及经过授权的X/雪球/微信公众号尚未接入，缺失内容省略，不让模型补造。
-- **部署状态**：代码已发布、Secrets 已保存、模型可调用、云端 SMTP 可用和每日计划已启用是不同阶段。以仓库当前代码、运行结果及实际邮件确认完成情况，不能仅凭备用部署包存在或本机测试成功判断云端已上线。
+- **Timing**: The main job starts at 07:00 New York local time every day, with fallback checks at 07:20 and 08:10. A completed digest skips sending. If the day's edition is missing, a fallback job generates and sends it; after a partial delivery failure, the day's frozen edition is used to resend only mail that can be safely retried. Accepted or uncertain mail is never resent. All three triggers use GitHub Actions, so an outage on that platform can affect all of them at once. Workflows must be on the default branch, and scheduled workflows in a public repository may be disabled automatically after 60 days without activity. [Schedule docs](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#schedule)
+- **Content**: Each new bilingual edition puts the full English text first in one email, followed by an item-by-item matching Simplified Chinese text, with full sections, focused on macro, U.S. equities and quantitative research; general news includes only major events. The default `config/friend-sources.json` has 21 sources: official sources such as the Fed, BLS, SEC, arXiv and NVIDIA; public feeds from CNBC, WSJ, SCMP, Digitimes, Leiphone and ifanr; and 5 podcasts recommended by a friend. Moomoo's official News Search additionally searches NVIDIA, Microsoft and Federal Reserve by default and selects up to 6 candidates by time, keeping only the headline, an explicit source time and the original link. Media items use only the headline and excerpt from the feed and podcasts use only episode descriptions, with no audio download; this is not complete market coverage. Licensed Reuters content, the Finnhub calendar, real-time quotes, consensus estimates and authorized X, Xueqiu or WeChat official accounts are not connected yet. Missing content is omitted and the model is not allowed to make it up.
+- **Deployment status**: Code published, Secrets saved, model callable, cloud SMTP working and the daily schedule enabled are separate stages. Confirm completion from the repository's current code, run results and actual email, not from the existence of a fallback bundle or a successful local test.
 
-## 新版邮件文案
+## New email copy
 
-新生成日报使用 `LevyQuant Morning Briefing — November 26, 2026` 形式的英文标题。确认信说明邮箱来自订阅页面、日报主题、约纽约时间早上7点发送，并保留48小时期限与网页二次确认。新日报页尾按公开确认订阅、原有授权名单或内部留档分别说明收到原因；普通收件人使用清楚的 `Unsubscribe from LevyQuant` 链接，固定内部名单不添加退订入口。
+Newly generated digests use an English subject in the form `LevyQuant Morning Briefing — November 26, 2026`. The confirmation email explains that the address came from the subscription page, what the digest covers and that it is sent around 7 a.m. New York time, and keeps the 48-hour deadline and the second confirmation step on the web page. The new digest footer explains why each person receives it: a confirmed public subscription, the original authorized list or internal archiving. Regular recipients get a clear `Unsubscribe from LevyQuant` link; the fixed internal list gets no unsubscribe link.
 
-Coverage notice 只保留简短的范围说明、本期实际引用材料的阅读限制和实际发生的采集/截短/编辑剔除提示。上面的未接入服务清单仍是完整部署边界；精简页尾不放松任何来源、数字或日期核验。新版只用于新生成的日报及之后发送的确认信；旧冻结日报的主题、正文及已接受投递记录保持原样，不因文案升级重发。改文案不能保证进入收件箱。
+The Coverage notice keeps only a short scope statement, reading limits for the material actually cited in that edition and notes about collection, truncation or editorial removal that actually happened. The list of unconnected services above remains the full deployment boundary; the shorter footer does not relax any source, number or date verification. The new copy applies only to newly generated digests and confirmation emails sent afterward. Subjects, text and accepted delivery records of older frozen digests stay as they were and are not resent because of the copy change. Changing the copy cannot guarantee inbox placement.
 
-## 双语邮件格式
+## Bilingual email format
 
-新日报在同一封邮件中先提供英文全文，再提供完整对应的简体中文译文。两部分按相同顺序呈现条目、来源链接和已核验的数字与日期。网页语言设置独立于这个排版顺序。
+Each new digest provides the full English text first in one email, followed by a complete matching Simplified Chinese translation. Both parts present items, source links and verified numbers and dates in the same order. The website's language setting is independent of this layout order.
 
-翻译使用已确认免费层的现有模型，每份新稿最多尝试两次翻译。双语稿需要通过翻译校验才能发送。带明确时区的时刻按 `America/New_York` 展示日期及 EST/EDT 标识，只有日期的资料按原精度展示。
+Translation uses the existing model on the confirmed free tier, with at most two translation attempts per new edition. A bilingual edition must pass translation validation before it can be sent. Times with an explicit time zone are shown as `America/New_York` dates with an EST/EDT marker; date-only material keeps its original precision.
 
-同日重试继续使用该期已经冻结的正文和投递记录。
+Same-day retries keep using that edition's frozen text and delivery records.
 
-## 公开往期简报
+## Public archive
 
-主页的「往期简报 / Archive」通往 `/archive`，可选择月份、在该月份全文搜索、按日期打开，并分享 `/archive?date=YYYY-MM-DD`。界面沿用中英文切换，每页列出10期，正文保留原稿语言。
+The homepage's "Archive" link leads to `/archive`, where you can pick a month, search the full text within that month, open an edition by date and share `/archive?date=YYYY-MM-DD`. The interface keeps the English/Chinese switch, lists 10 editions per page, and edition text stays in its original language.
 
-新日报被邮件服务器接受后会自动收录；管理员主动公开发布的稿件也会收录。归档按日期保留首次公开版本，因此同日后来发布的修订或正式邮件可能与该版本不同。私人预览不会自动公开。公开接口仅返回未个性化的标题、日期和正文；投递记录、订阅信息和收件人专属链接继续留在加密后台状态中。
+A new digest is added automatically once the mail server accepts it; editions an administrator explicitly publishes are added too. The archive keeps the first public version for each date, so a later revision or real email on the same day may differ from it. Private previews are never published automatically. The public API returns only non-personalized titles, dates and text; delivery records, subscription data and recipient-specific links stay in the encrypted admin state.
 
-历史回填由已认证管理员调用 `POST /api/admin/archive/backfill`，每批最多31个日期，返回游标供下一批使用。它验证已有正式稿与真实接受记录，并可纳入已公开的最新一期；无需重新生成或发送邮件，也不会改写原来的冻结稿。归档快照和日期索引沿用现有加密存储与CAS，写入失败可重试补索引。当前没有自动删除归档的规则。
+An authenticated administrator backfills history with `POST /api/admin/archive/backfill`, up to 31 dates per batch, with a cursor returned for the next batch. It verifies existing official editions against real acceptance records and may include the latest published edition; it does not regenerate or send email and does not rewrite the original frozen editions. Archive snapshots and the date index reuse the existing encrypted storage and CAS, and a failed write can be retried to complete the index. There is currently no automatic archive deletion rule.
