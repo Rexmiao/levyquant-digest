@@ -1148,5 +1148,21 @@ class ArchiveAppTests(unittest.TestCase):
         self.assertEqual(self.store.values[space_app.PUBLIC_PATH]["text"], "A later published revision")
 
 
+class RecipientCapacityNoticeTests(unittest.TestCase):
+    STATIC = Path(__file__).resolve().parent.parent / "runtime/huggingface/static"
+
+    def test_admin_warns_before_the_daily_recipient_cap(self):
+        script = (self.STATIC / "app.js").read_text(encoding="utf-8")
+        page = (self.STATIC / "admin.html").read_text(encoding="utf-8")
+        self.assertIn('id="recipient-capacity-notice"', page)
+        self.assertIn("const CAPACITY_WARN_AT = 80;", script)
+        self.assertIn("const CAPACITY_LIMIT = 100;", script)
+        self.assertEqual(script.count("capacityWarning:"), 2)
+        self.assertEqual(script.count("capacityCritical:"), 2)
+        planned = {"user%03d@example.org" % index for index in range(101)}
+        with self.assertRaisesRegex(daily.ConfigurationError, "More than 100"):
+            daily.recipients_from(json.dumps(sorted(planned)))
+
+
 if __name__ == "__main__":
     unittest.main()

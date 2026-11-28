@@ -277,3 +277,4 @@ body[data-page="public"] ::selection,body[data-page="archive"] ::selection{backg
 html[lang="zh-CN"] .inside-grid h3{letter-spacing:.04em}
 .signup-card #signup-button{margin-top:16px}
 .framed-notice{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:12px 20px;margin-bottom:22px;border-left:4px solid var(--brass,#d9822b)}.framed-notice p{margin:0;max-width:60ch;font-size:14px;line-height:1.6}.framed-notice .button{flex-shrink:0}
+.capacity-notice{margin-top:12px;border-left:4px solid #d9822b;background:#fff6e8;color:#5a3a12;line-height:1.7}.capacity-notice.critical{border-left-color:#b4432f;background:#fdecea;color:#7a2216;font-weight:600}

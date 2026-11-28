@@ -383,7 +383,9 @@
     deliveryAllAccepted: 'SMTP acceptance recorded', deliveryPrepared: 'Prepared; submission pending',
     deliveryNoRecipients: 'No planned recipients', deliveryUncertainStatus: 'Submission outcome uncertain',
     deliveryEditionCompleted: 'Submission attempts completed', deliveryWorkflowNeutral: 'Workflow ended: neutral',
-    deliveryWorkflowStale: 'Workflow result stale', deliveryWorkflowStartupFailed: 'Workflow could not start'
+    deliveryWorkflowStale: 'Workflow result stale', deliveryWorkflowStartupFailed: 'Workflow could not start',
+    capacityWarning: 'Recipient count is approaching the {limit}-address limit: about {count} (largest of the formal editions in the last 7 days and confirmed public subscribers). If the combined list goes above {limit}, the whole daily send stops and no one receives that edition. Plan the move to a dedicated email service now.',
+    capacityCritical: 'Recipient count has reached the {limit}-address limit: about {count}. If the combined list is above {limit}, the next daily send will stop before any email is sent. Move to a dedicated email service, or reduce the list, before the next edition.'
   });
   Object.assign(TEXT.zh, {
     deliveryEyebrow: '正式日报投递', deliveryTitle: '最近 7 天：实际投递记录',
@@ -402,6 +404,8 @@
     deliveryCounts: '已记录计数', deliveryDiagnostic: '诊断', deliveryLoading: '正在加载投递记录…',
     deliveryUnavailable: '投递看板暂时不可用，请刷新状态重试；其他后台功能仍可使用。',
     deliveryNoEditions: '最近七天尚无已记录的正式日报。', deliveryNoRuns: '此报表尚无工作流运行记录。',
+    capacityWarning: '收件人数接近 {limit} 人上限：约 {count} 人（取最近 7 天正式日报计划人数与已确认公开订阅者中的较大值）。合并名单超过 {limit} 人时，当天日报会整体停止发送，所有人都收不到。请现在开始准备迁移到专业邮件服务。',
+    capacityCritical: '收件人数已达到 {limit} 人上限：约 {count} 人。合并名单超过 {limit} 人时，下一期日报会在发出任何邮件前停止。请在下一期之前迁移到专业邮件服务，或缩减名单。',
     deliveryRunsUnavailable: '暂时无法读取实时工作流历史，以下已保存运行记录可能不完整。',
     deliveryLegacyCounts: '历史计数不完整', deliveryUnknown: '未知',
     deliveryModeSend: '正式发送', deliveryModePreview: '仅预览', deliveryModePreviewEmail: '预览邮件（仅发件人）',
@@ -1307,7 +1311,40 @@
     message('login-status', '');
     message('action-status', '');
   }
+  const CAPACITY_WARN_AT = 80;
+  const CAPACITY_LIMIT = 100;
+  function recipientEstimate() {
+    if (!hasAdminSession()) return null;
+    let estimate = null;
+    if (Array.isArray(view.subscribers) && !view.subscribersLoading && !view.subscribersUnavailable) {
+      estimate = view.subscribers.filter(item => item && item.status === 'confirmed').length;
+    }
+    const report = view.deliveryReportState === 'loaded' ? view.deliveryReport : null;
+    if (report && Array.isArray(report.editions)) {
+      for (const edition of report.editions) {
+        const planned = edition && edition.recipient_count;
+        if (Number.isInteger(planned) && planned >= 0) estimate = Math.max(estimate === null ? 0 : estimate, planned);
+      }
+    }
+    return estimate;
+  }
+  function renderCapacityNotice() {
+    const node = $('recipient-capacity-notice');
+    if (!node) return;
+    const count = recipientEstimate();
+    if (count === null || count < CAPACITY_WARN_AT) {
+      node.hidden = true;
+      node.textContent = '';
+      node.classList.remove('critical');
+      return;
+    }
+    const critical = count >= CAPACITY_LIMIT;
+    node.textContent = t(critical ? 'capacityCritical' : 'capacityWarning', {count, limit: CAPACITY_LIMIT});
+    node.classList.toggle('critical', critical);
+    node.hidden = false;
+  }
   function renderSubscribers() {
+    renderCapacityNotice();
     const tbody = $('subscribers-body');
     if (!tbody) return;
     tbody.replaceChildren();
@@ -1459,6 +1496,7 @@
     }
   }
   function renderDeliveryReport() {
+    renderCapacityNotice();
     const body = $('delivery-editions-body');
     if (!body) return;
     const runsBody = $('delivery-runs-body');
