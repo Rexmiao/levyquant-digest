@@ -120,7 +120,7 @@ def prepare_message(
     if not isinstance(text, str) or not isinstance(html, str):
         raise DeliveryError("Text and HTML bodies must be strings.", stage="validation")
     message = EmailMessage(policy=policy.SMTP)
-    message["From"] = formataddr(("LevyQuant", sender))
+    message["From"] = formataddr(("LévyQuant", sender))
     message["To"] = recipient
     message["Subject"] = subject
     message["Date"] = formatdate(localtime=False)

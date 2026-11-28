@@ -428,7 +428,7 @@ class EditorTests(unittest.TestCase):
 class TranslationTests(unittest.TestCase):
     def setUp(self):
         self.key = "offline-translation-key"
-        self.digest = {"language": "en", "title": "LevyQuant Morning Briefing", "edition": "Morning Edition",
+        self.digest = {"language": "en", "title": "LévyQuant Morning Briefing", "edition": "Morning Edition",
             "date": "2026-11-27", "cutoff": "2026-11-27T12:00:00Z", "mode": "live",
             "sections": [{"id": "quant_research", "title": "QUANT RESEARCH", "items": [{
                 "title": "Method comparison", "summary": "Researchers use 120 observations.",
@@ -460,7 +460,7 @@ class TranslationTests(unittest.TestCase):
             result = self.translate()
         self.assertEqual(model.call_count, 1)
         self.assertEqual(self.digest, original)
-        self.assertEqual((result["language"], result["title"], result["edition"]), ("zh-CN", "LevyQuant 晨间简报", "晨间版"))
+        self.assertEqual((result["language"], result["title"], result["edition"]), ("zh-CN", "LévyQuant 晨间简报", "晨间版"))
         self.assertEqual([section["id"] for section in result["sections"]], ["quant_research", "watchlist"])
         self.assertEqual(result["sections"][1]["title"], SECTION_TITLES["zh-CN"][SECTION_IDS.index("watchlist")])
         self.assertEqual(result["sections"][1]["items"], [])

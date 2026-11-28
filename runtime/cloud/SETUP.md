@@ -1,4 +1,4 @@
-# LevyQuant Cloud Digest: Public Code, Encrypted State
+# LévyQuant Cloud Digest: Public Code, Encrypted State
 
 **English** | [简体中文](https://github.com/Rexmiao/levyquant-digest/blob/main/README.zh-CN.md)
 
@@ -123,7 +123,7 @@ If a run reports an uncertain delivery outcome, check the sent mail first and th
 
 ## New email copy
 
-Newly generated digests use an English subject in the form `LevyQuant Morning Briefing — November 26, 2026`. The confirmation email explains that the address came from the subscription page, what the digest covers and that it is sent around 7 a.m. New York time, and keeps the 48-hour deadline and the second confirmation step on the web page. The new digest footer explains why each person receives it: a confirmed public subscription, the original authorized list or internal archiving. Regular recipients get a clear `Unsubscribe from LevyQuant` link; the fixed internal list gets no unsubscribe link.
+Newly generated digests use an English subject in the form `LévyQuant Morning Briefing — November 26, 2026`. The confirmation email explains that the address came from the subscription page, what the digest covers and that it is sent around 7 a.m. New York time, and keeps the 48-hour deadline and the second confirmation step on the web page. The new digest footer explains why each person receives it: a confirmed public subscription, the original authorized list or internal archiving. Regular recipients get a clear `Unsubscribe from LévyQuant` link; the fixed internal list gets no unsubscribe link.
 
 The Coverage notice keeps only a short scope statement, reading limits for the material actually cited in that edition and notes about collection, truncation or editorial removal that actually happened. The list of unconnected services above remains the full deployment boundary; the shorter footer does not relax any source, number or date verification. The new copy applies only to newly generated digests and confirmation emails sent afterward. Subjects, text and accepted delivery records of older frozen digests stay as they were and are not resent because of the copy change. Changing the copy cannot guarantee inbox placement.
 

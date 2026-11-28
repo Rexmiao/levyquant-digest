@@ -252,7 +252,7 @@ class BusinessTests(unittest.TestCase):
         self.assertEqual(service.delivery_recipient_kind(RECIPIENTS[1], [RECIPIENTS[0]]), "authorized")
         self.assertEqual(service.delivery_recipient_kind("public-reader@example.org", [RECIPIENTS[0]]), "confirmed")
         self.assertEqual(service.delivery_recipient_kind("missing@example.org", [RECIPIENTS[0]]), "blocked")
-        digest = {"title": "LevyQuant Morning Briefing", "date": DATE, "language": "en", "mode": "live",
+        digest = {"title": "LévyQuant Morning Briefing", "date": DATE, "language": "en", "mode": "live",
             "footer_personalization": True, "sections": [{"title": "Macro", "items": [{
                 "title": "Example update", "summary": "<script>alert('untrusted')</script>", "source_ids": [ARTICLE["id"]]}]}]}
         html, text = render_digest(digest, [ARTICLE])
@@ -265,8 +265,8 @@ class BusinessTests(unittest.TestCase):
         daily.deliver_edition(self.store, PATH, value, recipients, sender="sender@example.com", password="offline",
             execution_id="test", transport=transport, subscription_service=service, internal_recipients=[RECIPIENTS[0]])
         reasons = {RECIPIENTS[0]: "Operator archive copy",
-            RECIPIENTS[1]: "This briefing is sent to an address on LevyQuant’s authorized mailing list.",
-            "public-reader@example.org": "This briefing is sent because you confirmed a LevyQuant subscription."}
+            RECIPIENTS[1]: "This briefing is sent to an address on LévyQuant’s authorized mailing list.",
+            "public-reader@example.org": "This briefing is sent because you confirmed a LévyQuant subscription."}
         for call in transport.call_args_list:
             message = call.args[0]
             address = str(message["To"])
@@ -282,9 +282,9 @@ class BusinessTests(unittest.TestCase):
             self.assertIn("&lt;script&gt;", body)
             if address == RECIPIENTS[0]:
                 self.assertIsNone(message["List-Unsubscribe"])
-                self.assertNotIn("Unsubscribe from LevyQuant", body + plain)
+                self.assertNotIn("Unsubscribe from LévyQuant", body + plain)
             else:
-                self.assertGreater(body.index("Unsubscribe from LevyQuant"), footer_start)
+                self.assertGreater(body.index("Unsubscribe from LévyQuant"), footer_start)
                 self.assertIn("&amp;token=", body)
                 self.assertIn("/one-click-unsubscribe?", str(message["List-Unsubscribe"]))
         frozen = self.store.load(PATH)
@@ -415,7 +415,7 @@ class InputAndPipelineTests(unittest.TestCase):
             "model": daily.FREE_MODEL, "lookback_hours": 48, "max_items_per_source": 30,
             "max_source_characters": 150000, "max_output_tokens": 8192, "fetch_timeout_seconds": 20,
             "max_enriched_articles": 10, "source_manifest": "manifest.json", "coverage_notices": [],
-            "edition": "Morning Edition", "title": "LevyQuant Morning Briefing", "history_days": 14}
+            "edition": "Morning Edition", "title": "LévyQuant Morning Briefing", "history_days": 14}
         self.environment = {"DIGEST_ENABLED": "true", "GEMINI_FREE_TIER_CONFIRMED": "true",
             "GEMINI_API_KEY": "offline-model-key", "SMTP_APP_PASSWORD": "offline-password",
             "GITHUB_TOKEN": "offline-github-token", "GITHUB_REPOSITORY": "owner/private",
@@ -459,15 +459,15 @@ class InputAndPipelineTests(unittest.TestCase):
         return sources, defaults
 
     def test_new_copy_uses_fixed_english_month_subject_and_unpersonalized_footer_slot(self):
-        self.assertEqual(daily._briefing_subject("2026-11-26"), "LevyQuant Morning Briefing — November 26, 2026")
-        self.assertEqual(daily._briefing_subject("2027-01-01"), "LevyQuant Morning Briefing — January 1, 2027")
+        self.assertEqual(daily._briefing_subject("2026-11-26"), "LévyQuant Morning Briefing — November 26, 2026")
+        self.assertEqual(daily._briefing_subject("2027-01-01"), "LévyQuant Morning Briefing — January 1, 2027")
         with self.assertRaises(daily.ConfigurationError):
             daily._briefing_subject("20261126")
         daily.run(self.config, "preview", self.environment, self.root / "outputs")
         value = TestStore(self.root / "outputs/preview-state").load(PATH)
         self.assertEqual(value["copy_version"], 2)
-        self.assertEqual(value["subject"], "LevyQuant Morning Briefing — November 25, 2026")
-        self.assertIn("LevyQuant Morning Briefing", value["html"])
+        self.assertEqual(value["subject"], "LévyQuant Morning Briefing — November 25, 2026")
+        self.assertIn("LévyQuant Morning Briefing", value["html"])
         self.assertEqual(value["html"].count(RECIPIENT_FOOTER_SLOT), 1)
         self.assertNotIn(RECIPIENT_FOOTER_SLOT, value["text"])
         self.assertNotIn("This briefing is sent", value["html"] + value["text"])
@@ -477,7 +477,7 @@ class InputAndPipelineTests(unittest.TestCase):
     def test_bilingual_edition_is_frozen_archived_and_sent_once_per_recipient(self):
         def translate(digest, **kwargs):
             chinese = deepcopy(digest)
-            chinese.update(language="zh-CN", title="LevyQuant 晨间简报", edition="晨间版")
+            chinese.update(language="zh-CN", title="LévyQuant 晨间简报", edition="晨间版")
             section = chinese["sections"][0]
             section["title"] = "地缘、宏观与政策"
             section["items"][0].update(title="政策公告", summary="该机构发布了政策公告。")
@@ -838,7 +838,7 @@ class InputAndPipelineTests(unittest.TestCase):
                 self.assertNotIn("Manage or unsubscribe", text)
                 self.assertNotIn("/unsubscribe?", text)
                 continue
-            self.assertIn("Unsubscribe from LevyQuant", text)
+            self.assertIn("Unsubscribe from LévyQuant", text)
             link = next(line for line in text.splitlines() if line.startswith(base + "/unsubscribe?"))
             self.assertNotIn("@", link)
             private_links.append(link)

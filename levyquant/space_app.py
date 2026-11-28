@@ -7,6 +7,7 @@ from datetime import date, datetime, timedelta, timezone
 from email import policy as email_policy
 from email.utils import format_datetime
 from email.parser import BytesParser
+import base64
 import hashlib
 import hmac
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -14,6 +15,7 @@ import json
 import os
 from pathlib import Path
 import re
+import unicodedata
 import tempfile
 import threading
 import time
@@ -42,8 +44,25 @@ _WORKFLOWS = frozenset(("daily-digest.yml", "subscription-mail.yml"))
 _FIELDS = ("date", "subject", "html", "text")
 _ADMIN_COOKIE = "__Host-lq_admin"
 _SESSION_TOKEN = re.compile(r"lq_session_[A-Za-z0-9_-]{43}\Z")
+# The only inline script allowed on public pages: it applies a remembered
+# Day/Night choice before first paint. index.html and archive.html must contain
+# exactly this text inside <script>...</script>; the CSP allows it by hash.
+THEME_BOOTSTRAP = ("try{var t=localStorage.getItem('levyquant.theme');"
+                   "if(t==='light'||t==='dark')document.documentElement.setAttribute('data-theme',t)}catch(e){}")
+THEME_BOOTSTRAP_CSP = "'sha256-" + base64.b64encode(hashlib.sha256(THEME_BOOTSTRAP.encode("utf-8")).digest()).decode("ascii") + "'"
 _ORIGIN_HOST = re.compile(r"(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}\Z")
 MAX_ADMIN_ORIGINS = 5
+
+
+def _search_fold(value: str) -> str:
+    """Case- and accent-insensitive search key, so 'LevyQuant' finds 'LévyQuant'.
+
+    Combining marks are removed after canonical decomposition, which keeps each
+    precomposed letter at one position (é -> e), so excerpt offsets still line up.
+    CJK text is unchanged.
+    """
+    decomposed = unicodedata.normalize("NFD", value)
+    return "".join(char for char in decomposed if not unicodedata.combining(char)).casefold()
 
 
 def additional_admin_origins(value) -> tuple[str, ...]:
@@ -561,17 +580,17 @@ class SpaceApplication:
         # Browsing needs only this page. A keyword search still checks every
         # date in the month so totals and matches cannot omit later pages.
         scan_dates = selected if query else selected[offset:offset + 10]
-        needle = query.casefold()
+        needle = _search_fold(query)
         matched = []
         for day in scan_dates:
             with self._archive_lock:
                 if store is None and day not in self._archive_bodies:
                     store = self._new_store(read_only=True)
                 edition = self._archive_edition(day, store=store)
-            if needle and needle not in (edition["subject"] + "\n" + edition["text"]).casefold():
+            if needle and needle not in _search_fold(edition["subject"] + "\n" + edition["text"]):
                 continue
             plain = " ".join(edition["text"].split())
-            position = plain.casefold().find(needle) if needle else 0
+            position = _search_fold(plain).find(needle) if needle else 0
             start = max(0, position - 70) if position >= 0 else 0
             excerpt = ("…" if start else "") + plain[start:start + 240]
             if start + 240 < len(plain):
@@ -867,7 +886,7 @@ class SpaceRequestHandler(BaseHTTPRequestHandler):
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("Referrer-Policy", "no-referrer")
         self.send_header("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
-        self.send_header("Content-Security-Policy", "default-src 'none'; script-src 'self'; "
+        self.send_header("Content-Security-Policy", "default-src 'none'; script-src 'self' " + THEME_BOOTSTRAP_CSP + "; "
             "style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; "
             "frame-src 'self' blob:; object-src 'none'; base-uri 'none'; form-action 'self'; "
             "frame-ancestors 'self' https://huggingface.co https://*.hf.space")

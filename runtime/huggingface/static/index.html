@@ -5,7 +5,8 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="color-scheme" content="light dark">
   <meta name="description" content="A daily briefing on macro, U.S. equities and quantitative research." data-i18n-content="publicDescription">
-  <title data-i18n="publicPageTitle">LevyQuant — The morning briefing</title>
+  <title data-i18n="publicPageTitle">LévyQuant — The morning briefing</title>
+  <script>try{var t=localStorage.getItem('levyquant.theme');if(t==='light'||t==='dark')document.documentElement.setAttribute('data-theme',t)}catch(e){}</script>
   <link rel="stylesheet" href="/static/app.css">
   <script src="/static/app.js" defer></script>
 </head>
@@ -14,14 +15,20 @@
   <div class="topbar">
     <div class="shell topbar-inner">
       <p class="dateline"><span data-i18n="datelineCity">New York</span> · <time id="masthead-date"></time></p>
-      <nav class="language-switcher" aria-label="Interface language" data-i18n-aria-label="languageSwitcher">
-        <button type="button" data-language="zh" lang="zh-CN" aria-label="Switch to Chinese" data-i18n-aria-label="switchToChinese" aria-pressed="false">中文</button>
-        <button type="button" data-language="en" lang="en" aria-label="Switch to English" data-i18n-aria-label="switchToEnglish" aria-pressed="true">EN</button>
-      </nav>
+      <div class="topbar-controls">
+        <div class="theme-switcher" role="group" aria-label="Color theme" data-i18n-aria-label="themeSwitcher">
+          <button type="button" data-theme-choice="light" aria-pressed="false" data-i18n="themeDay">Day</button>
+          <button type="button" data-theme-choice="dark" aria-pressed="false" data-i18n="themeNight">Night</button>
+        </div>
+        <nav class="language-switcher" aria-label="Interface language" data-i18n-aria-label="languageSwitcher">
+          <button type="button" data-language="zh" lang="zh-CN" aria-label="Switch to Chinese" data-i18n-aria-label="switchToChinese" aria-pressed="false">中文</button>
+          <button type="button" data-language="en" lang="en" aria-label="Switch to English" data-i18n-aria-label="switchToEnglish" aria-pressed="true">EN</button>
+        </nav>
+      </div>
     </div>
   </div>
   <header class="masthead shell">
-    <a class="nameplate" href="/" aria-label="LevyQuant home" data-i18n-aria-label="brandHomeLabel">LevyQuant</a>
+    <a class="nameplate" href="/" aria-label="LévyQuant home" data-i18n-aria-label="brandHomeLabel">LévyQuant</a>
     <p class="masthead-tagline" data-i18n="mastheadTagline">Macro · U.S. Equities · Quantitative Research</p>
     <nav class="masthead-nav" aria-label="Primary" data-i18n-aria-label="primaryNavLabel">
       <a href="/#preview" data-i18n="navLatest">Latest</a>
@@ -71,9 +78,9 @@
       </div>
       <p id="edition-notice" class="muted front-notice">The first public edition is being prepared. This space will show the actual briefing once it is published.</p>
       <p class="small muted content-language-note" data-i18n="contentLanguageNotice">Edition language: English.</p>
-      <div id="preview-empty" class="preview-placeholder"><span class="paper-label" data-i18n="previewPaperLabel">LEVYQUANT / MORNING EDITION</span><div class="placeholder-line long"></div><div class="placeholder-line"></div><div class="placeholder-line short"></div><div class="placeholder-divider"></div><p data-i18n="previewMacro">Macro &amp; policy</p><p data-i18n="previewEquities">U.S. companies &amp; sectors</p><p data-i18n="previewResearch">Quantitative research</p></div>
+      <div id="preview-empty" class="preview-placeholder"><span class="paper-label" data-i18n="previewPaperLabel">LÉVYQUANT / MORNING EDITION</span><div class="placeholder-line long"></div><div class="placeholder-line"></div><div class="placeholder-line short"></div><div class="placeholder-divider"></div><p data-i18n="previewMacro">Macro &amp; policy</p><p data-i18n="previewEquities">U.S. companies &amp; sectors</p><p data-i18n="previewResearch">Quantitative research</p></div>
       <div id="edition-highlights" class="highlights" hidden></div>
-      <iframe id="public-preview" class="digest-frame" title="Latest LevyQuant briefing" data-i18n-title="publicPreviewTitle" sandbox="allow-same-origin allow-popups allow-popups-to-escape-sandbox" hidden></iframe>
+      <iframe id="public-preview" class="digest-frame" title="Latest LévyQuant briefing" data-i18n-title="publicPreviewTitle" sandbox="allow-same-origin allow-popups allow-popups-to-escape-sandbox" hidden></iframe>
     </section>
 
     <section class="inside-grid" aria-labelledby="inside-heading">
@@ -89,7 +96,7 @@
   </main>
 
   <footer class="site-footer shell">
-    <div class="footer-brand"><span class="footer-nameplate">LevyQuant</span><span data-i18n="footerHabit">A daily reading habit.</span></div>
+    <div class="footer-brand"><span class="footer-nameplate">LévyQuant</span><span data-i18n="footerHabit">A daily reading habit.</span></div>
     <nav class="footer-links" aria-label="Footer" data-i18n-aria-label="footerNavLabel"><a href="/archive" data-i18n="archiveLink">Archive</a><a href="/#subscribe" data-i18n="navSubscribe">Subscribe</a><a class="footer-admin" href="/admin" data-i18n="footerAdminLogin">Admin</a></nav>
     <p class="footer-context" data-i18n="footerContext">Public sources. Original links. Clear context.</p>
   </footer>

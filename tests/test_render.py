@@ -25,7 +25,7 @@ class ParsedHTML(HTMLParser):
 class RenderDigestTests(unittest.TestCase):
     def setUp(self):
         self.digest = {
-            "title": "LevyQuant Daily",
+            "title": "LévyQuant Daily",
             "edition": "Morning Edition",
             "date": "2026-11-25",
             "cutoff": "2026-11-25T07:00:00-05:00",
@@ -189,7 +189,7 @@ class RenderDigestTests(unittest.TestCase):
     def test_new_brand_and_optional_personalization_slot_are_only_in_the_footer(self):
         self.digest.update(language="en", footer_personalization=True)
         html, text = render_digest(self.digest, self.articles)
-        brand = "LevyQuant · Macro, U.S. equities and quantitative research · Source articles: 1"
+        brand = "LévyQuant · Macro, U.S. equities and quantitative research · Source articles: 1"
         self.assertIn(brand, text)
         self.assertEqual(html.count(RECIPIENT_FOOTER_SLOT), 1)
         footer_start = html.index('data-digest-block="footer"')
@@ -202,7 +202,7 @@ class RenderDigestTests(unittest.TestCase):
 
     def bilingual_pair(self):
         english = copy.deepcopy(self.digest)
-        english.update(language="en", title="LevyQuant Morning Briefing", footer_personalization=True,
+        english.update(language="en", title="LévyQuant Morning Briefing", footer_personalization=True,
                        cutoff="2026-11-25T12:00:00Z", coverage_warnings=["English coverage limitation."])
         english["sections"][0]["title"] = "MACRO CALENDAR"
         english["sections"].append({"id": "quant_research", "title": "QUANT RESEARCH", "items": [{
@@ -210,7 +210,7 @@ class RenderDigestTests(unittest.TestCase):
             "analysis": "English research analysis.", "source_ids": ["a2"],
         }]})
         chinese = copy.deepcopy(english)
-        chinese.update(language="zh-CN", title="LevyQuant 晨间简报", edition="晨间版",
+        chinese.update(language="zh-CN", title="LévyQuant 晨间简报", edition="晨间版",
                        coverage_warnings=["中文资料覆盖说明。"])
         chinese["sections"][0]["title"] = "宏观日历"
         chinese["sections"][0]["items"][0].update(title="中文宏观条目", summary="中文宏观摘要。", analysis="中文宏观分析。")
@@ -242,7 +242,7 @@ class RenderDigestTests(unittest.TestCase):
             self.assertIn("资料截止: 2026-11-25 07:00 EST", output)
             self.assertIn("Editorial analysis:", output)
             self.assertIn("编辑分析:", output)
-            self.assertEqual(output.count("LevyQuant · Macro, U.S. equities and quantitative research"), 1)
+            self.assertEqual(output.count("LévyQuant · Macro, U.S. equities and quantitative research"), 1)
             self.assertIn("Source articles: 2", output)
             self.assertNotIn("Source articles: 4", output)
         self.assertEqual(html.count('data-digest-block="footer"'), 1)

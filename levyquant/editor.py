@@ -521,7 +521,7 @@ def editor_to_digest(editor: object, articles: list[dict], *, date: str, cutoff:
             if language == "en" else
             f"已剔除 {count} 条未通过来源证据检查的编辑条目；其余条目通过相同检查。"
         )
-    digest = {"title": "LevyQuant Daily", "edition": edition, "date": date, "cutoff": cutoff,
+    digest = {"title": "LévyQuant Daily", "edition": edition, "date": date, "cutoff": cutoff,
             "language": language, "mode": mode, "demo": mode == "demo", "send_allowed": mode != "demo",
             "coverage_warnings": notices, "sections": sections,
             "validation_scope": "supplied_source_provenance_only", "fact_checked": False}
@@ -708,7 +708,7 @@ def translate_digest(digest: dict, *, api_key: str, model: str,
     if not isinstance(digest, dict) or digest.get("language") != "en" or not isinstance(digest.get("sections"), list):
         invalid_input()
     translated = deepcopy(digest)
-    translated.update(language="zh-CN", title="LevyQuant 晨间简报", edition="晨间版")
+    translated.update(language="zh-CN", title="LévyQuant 晨间简报", edition="晨间版")
     targets = []
 
     def add(key, text, destination, field, suffix=""):

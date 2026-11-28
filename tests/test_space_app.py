@@ -786,6 +786,8 @@ class HttpBoundaryTests(unittest.TestCase):
                 self.assertEqual(headers["Cache-Control"], "no-store")
                 self.assertEqual(headers["Referrer-Policy"], "no-referrer")
                 self.assertIn("object-src 'none'", headers["Content-Security-Policy"])
+                self.assertIn("script-src 'self' " + space_app.THEME_BOOTSTRAP_CSP + ";", headers["Content-Security-Policy"])
+                self.assertNotIn("unsafe-inline';", headers["Content-Security-Policy"].split("style-src")[0])
                 self.assertNotIn("Access-Control-Allow-Origin", headers)
         self.assertEqual(captured_out.getvalue() + captured_err.getvalue(), "")
         self.service.confirm.assert_not_called()
@@ -1219,6 +1221,35 @@ class ArchiveAppTests(unittest.TestCase):
         self.request("POST", "/api/admin/publish", {}, auth=AUTH)
         self.assertEqual(archive.read_edition(self.store, "2026-11-26")["text"], "First public draft")
         self.assertEqual(self.store.values[space_app.PUBLIC_PATH]["text"], "A later published revision")
+
+
+class ArchiveSearchFoldTests(unittest.TestCase):
+    def test_search_key_ignores_case_and_accents_but_keeps_chinese_and_positions(self):
+        fold = space_app._search_fold
+        self.assertEqual(fold("LévyQuant Morning Briefing"), fold("LevyQuant MORNING briefing"))
+        self.assertIn(fold("levyquant"), fold("Weekly LévyQuant note"))
+        self.assertIn(fold("LÉVY"), fold("old LevyQuant edition"))
+        self.assertEqual(fold("美联储 Lévy"), "美联储 levy")
+        text = "Macro · LévyQuant · cobalt"
+        self.assertEqual(len(fold(text)), len(text))
+        self.assertEqual(text[fold(text).find("cobalt"):], "cobalt")
+
+
+class ThemeBootstrapTests(unittest.TestCase):
+    STATIC = Path(__file__).resolve().parent.parent / "runtime/huggingface/static"
+
+    def test_inline_theme_script_matches_the_csp_hash_and_is_the_only_inline_script(self):
+        import base64, hashlib, re
+        expected = "'sha256-" + base64.b64encode(hashlib.sha256(space_app.THEME_BOOTSTRAP.encode()).digest()).decode() + "'"
+        self.assertEqual(space_app.THEME_BOOTSTRAP_CSP, expected)
+        for name in ("index.html", "archive.html"):
+            with self.subTest(page=name):
+                page = (self.STATIC / name).read_text(encoding="utf-8")
+                inline = re.findall(r"<script>(.*?)</script>", page, re.S)
+                self.assertEqual(inline, [space_app.THEME_BOOTSTRAP])
+                self.assertLess(page.index("<script>"), page.index('href="/static/app.css"'))
+        admin = (self.STATIC / "admin.html").read_text(encoding="utf-8")
+        self.assertEqual(re.findall(r"<script>(.*?)</script>", admin, re.S), [])
 
 
 class AdminOriginParsingTests(unittest.TestCase):
