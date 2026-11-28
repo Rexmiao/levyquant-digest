@@ -15,8 +15,19 @@
   </header>
   <main class="shell admin-main">
     <div id="admin-framed-notice" class="notice framed-notice" role="alert" hidden><p data-i18n="adminFramedNotice">This console is embedded in another page, where your browser will not keep the sign-in after a refresh. Open it in its own tab to stay signed in.</p><a id="admin-framed-link" class="button primary" href="/admin" target="_blank" rel="noopener"><span data-i18n="adminFramedOpen">Open the console in a new tab</span> <span aria-hidden="true">↗</span></a></div>
-    <p id="admin-session-status" class="form-status" role="status" aria-live="polite" hidden></p>
-    <section id="admin-login" class="flow-card login-card">
+    <div id="admin-shell" class="admin-title">
+      <div>
+        <p class="eyebrow" data-i18n="adminDashboardEyebrow">THE CONTROL ROOM</p>
+        <h1 data-i18n="adminDashboardTitle">Daily briefing</h1>
+        <p class="muted" data-i18n="adminSchedule">Every day at 7 AM New York time. Fixed internal recipients stay on a separate list.</p>
+      </div>
+      <button id="logout-button" hidden class="button secondary" type="button" data-i18n="adminLogout">Sign out</button>
+    </div>
+    <section id="admin-session-check" class="flow-card">
+      <p id="admin-session-status" class="form-status" role="status" aria-live="polite">Checking your saved sign-in…</p>
+      <button id="admin-session-retry" class="button secondary" type="button" data-i18n="adminSessionRetry" hidden>Try again</button>
+    </section>
+    <section id="admin-login" class="flow-card login-card" hidden>
       <p class="eyebrow" data-i18n="adminLoginEyebrow">OWNER ACCESS</p><h1 data-i18n="adminLoginTitle">Manage your briefing.</h1>
       <p class="muted" data-i18n="adminEmailLoginCopy">Sign in with an email verification code. This browser stays signed in for up to one hour, including after refresh, until you sign out.</p>
       <form id="admin-email-login-form" autocomplete="off">
@@ -38,7 +49,6 @@
       </details>
     </section>
     <section id="admin-dashboard" hidden>
-      <div class="admin-title"><div><p class="eyebrow" data-i18n="adminDashboardEyebrow">THE CONTROL ROOM</p><h1 data-i18n="adminDashboardTitle">Daily briefing</h1><p class="muted" data-i18n="adminSchedule">Every day at 7 AM New York time. Fixed internal recipients stay on a separate list.</p></div><button id="logout-button" class="button secondary" type="button" data-i18n="adminLogout">Sign out</button></div>
       <p id="admin-status" class="notice" role="status" aria-live="polite"></p>
       <div class="admin-actions"><button id="generate-button" class="button primary" type="button" data-i18n="adminGenerate">Generate private preview</button><button id="publish-button" class="button secondary" type="button" data-i18n="adminPublish" disabled>Publish to public page</button><button id="send-button" class="button secondary" type="button" data-i18n="adminSend">Send this edition</button><button id="refresh-button" class="button secondary" type="button" data-i18n="adminRefresh">Refresh status</button></div>
       <p id="action-status" class="form-status" role="status" aria-live="polite"></p>

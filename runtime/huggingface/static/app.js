@@ -316,7 +316,11 @@
     adminSessionExpired: 'Your session has expired. Request a new email code to sign in again.',
     adminSigningOut: 'Signing out…',
     adminRestoringSession: 'Checking your saved sign-in…',
-    adminSessionRestoreUnavailable: 'Your saved sign-in could not be checked. Reload to try again, or sign in below.',
+    adminSessionRestoreUnavailable: 'Your saved sign-in could not be checked. Try again.',
+    adminSessionRetry: 'Try again',
+    adminStatusLoading: 'Loading console status…',
+    adminStatusUnavailable: 'Console status is temporarily unavailable.',
+    adminSubscribersLoading: 'Loading subscriptions…',
     adminSignOutUnavailable: 'Sign-out could not be confirmed. Please try signing out again before leaving this browser.',
     adminSignedOut: 'You have signed out.',
     adminRecoverySummary: 'Use a recovery credential',
@@ -339,7 +343,11 @@
     adminSessionExpired: '管理会话已过期，请重新获取邮箱验证码登录。',
     adminSigningOut: '正在退出登录…',
     adminRestoringSession: '正在检查已保存的登录状态…',
-    adminSessionRestoreUnavailable: '暂时无法检查已有登录状态。请刷新重试，或在下方重新登录。',
+    adminSessionRestoreUnavailable: '暂时无法确认登录状态，请重试。',
+    adminSessionRetry: '重试',
+    adminStatusLoading: '正在加载后台状态…',
+    adminStatusUnavailable: '后台状态暂时无法加载。',
+    adminSubscribersLoading: '正在加载订阅列表…',
     adminSignOutUnavailable: '暂时无法确认已退出。离开当前浏览器前，请再次尝试退出登录。',
     adminSignedOut: '已退出登录。',
     adminRecoverySummary: '使用恢复凭证',
@@ -508,6 +516,7 @@
   let adminToken = '';
   let adminCookieSession = false;
   let adminSessionRestoring = false;
+  let adminRefreshSequence = 0;
   let adminGeneration = 0;
   let emailLoginSequence = 0;
   let emailLoginTimer = null;
@@ -526,7 +535,8 @@
   let archiveSearchController = null, archiveOpenController = null;
   const view = {
     edition: null, signupEnabled: false, signupSubmitting: false, flow: null,
-    subscribers: [], subscribersUnavailable: false, runs: [], runsUnavailable: false, adminStatus: null,
+    subscribers: [], subscribersLoading: false, subscribersUnavailable: false,
+    runs: [], runsUnavailable: false, adminStatus: null, adminStatusUnavailable: false,
     deliveryReport: null, deliveryReportState: 'idle'
   };
   function t(key, values = {}) {
@@ -1140,15 +1150,23 @@
       /(?:Z|[+-][0-9]{2}:[0-9]{2})$/.test(result.expires_at) &&
       Number.isFinite(Date.parse(result.expires_at));
   }
+  function setAdminScreen(screen) {
+    $('admin-shell').hidden = screen === 'login';
+    $('admin-session-check').hidden = screen !== 'checking';
+    $('admin-login').hidden = screen !== 'login';
+    $('admin-dashboard').hidden = screen !== 'dashboard';
+    $('logout-button').hidden = screen !== 'dashboard';
+  }
   function showAdminDashboard(generation) {
-    if (generation !== adminGeneration || !hasAdminSession()) return false;
+    if (generation !== adminGeneration || !hasAdminSession()) return;
     $('admin-token').value = '';
     $('admin-recovery-login').open = false;
-    $('admin-login').hidden = true;
-    $('admin-dashboard').hidden = false;
+    setAdminScreen('dashboard');
     resetEmailLogin();
     message('login-status', '');
-    return true;
+    refreshAdmin().catch(error => {
+      if (!error.stale && generation === adminGeneration) showError('action-status', error);
+    });
   }
   async function verifyAdminCode() {
     const code = $('admin-login-code').value;
@@ -1169,7 +1187,6 @@
       adminToken = '';
       adminCookieSession = true;
       state.code = ''; state.challengeId = null;
-      await refreshAdmin();
       showAdminDashboard(generation);
     } catch (error) {
       if (error.stale || generation !== adminGeneration || sequence !== emailLoginSequence || state !== emailLogin) return;
@@ -1185,29 +1202,33 @@
     }
   }
   async function restoreAdminSession() {
+    if (adminSessionRestoring) return;
     const generation = ++adminGeneration;
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 10000);
     adminSessionRestoring = true;
-    $('admin-session-status').hidden = false;
+    setAdminScreen('checking');
+    $('admin-session-retry').hidden = true;
     message('admin-session-status', 'adminRestoringSession');
-    renderEmailLogin();
     try {
-      const result = await api('/api/admin/session');
+      const result = await api('/api/admin/session', {signal: controller.signal});
       if (generation !== adminGeneration) return;
       if (!validAdminSession(result)) throw errorFor('adminSessionRestoreUnavailable');
       adminToken = '';
       adminCookieSession = true;
-      await refreshAdmin();
       showAdminDashboard(generation);
     } catch (error) {
       if (error.stale || generation !== adminGeneration) return;
-      adminToken = '';
-      adminCookieSession = false;
-      if (error.status !== 401) message('admin-email-login-status', 'adminSessionRestoreUnavailable', true);
+      if (error.status === 401) {
+        clearAdminSession();
+      } else {
+        message('admin-session-status', 'adminSessionRestoreUnavailable', true);
+        $('admin-session-retry').hidden = false;
+      }
     } finally {
+      clearTimeout(timeout);
       if (generation === adminGeneration) {
         adminSessionRestoring = false;
-        $('admin-session-status').hidden = true;
-        message('admin-session-status', '');
         renderEmailLogin();
       }
     }
@@ -1217,8 +1238,7 @@
     if (!hasAdminSession()) { clearAdminSession(); return; }
     const generation = ++adminGeneration;
     logoutBusy = true;
-    $('admin-dashboard').hidden = true;
-    $('admin-login').hidden = false;
+    setAdminScreen('login');
     message('admin-email-login-status', 'adminSigningOut');
     renderEmailLogin();
     const controller = new AbortController();
@@ -1230,8 +1250,7 @@
       signedOut = true;
     } catch (error) {
       if (error.stale || generation !== adminGeneration) return;
-      $('admin-login').hidden = true;
-      $('admin-dashboard').hidden = false;
+      setAdminScreen('dashboard');
       message('action-status', 'adminSignOutUnavailable', true);
     }
     finally {
@@ -1258,7 +1277,9 @@
     if (previewTimer) clearTimeout(previewTimer);
     previewTimer = null;
     view.adminStatus = null;
+    view.adminStatusUnavailable = false;
     view.subscribers = [];
+    view.subscribersLoading = false;
     view.runs = [];
     view.subscribersUnavailable = false;
     view.runsUnavailable = false;
@@ -1273,10 +1294,11 @@
     moomooSettings = emptyMoomooSettings();
     renderMoomooSettings();
     $('admin-token').value = '';
-    $('admin-dashboard').hidden = true;
-    $('admin-login').hidden = false;
-    $('admin-session-status').hidden = true;
+    setAdminScreen('login');
+    $('admin-session-retry').hidden = true;
     message('admin-session-status', '');
+    $('admin-status').textContent = '';
+    $('subscriber-count').textContent = '';
     $('subscribers-body').replaceChildren();
     renderDeliveryReport();
     $('private-preview').srcdoc = '';
@@ -1289,6 +1311,10 @@
     const tbody = $('subscribers-body');
     if (!tbody) return;
     tbody.replaceChildren();
+    if (view.subscribersLoading) {
+      $('subscriber-count').textContent = t('adminSubscribersLoading');
+      return;
+    }
     if (view.subscribersUnavailable) {
       $('subscriber-count').textContent = t('subscribersUnavailable');
       return;
@@ -1511,7 +1537,11 @@
   }
   function renderAdminStatus() {
     const status = view.adminStatus;
-    if (!status || !$('admin-status')) return;
+    if (!$('admin-status')) return;
+    if (view.adminStatusUnavailable || !status) {
+      $('admin-status').textContent = t(view.adminStatusUnavailable ? 'adminStatusUnavailable' : 'adminStatusLoading');
+      return;
+    }
     $('admin-status').textContent = Array.isArray(status.missing) && status.missing.length ?
       t('adminMissing', {names: status.missing.join(language === 'zh' ? '、' : ', ')}) : t('adminConnected');
     if (view.subscribersUnavailable) $('admin-status').textContent += ' ' + t('stateReadFailed');
@@ -1609,28 +1639,57 @@
     }
     if (generation === adminGeneration && state === moomooSettings) renderMoomooSettings();
   }
-  async function refreshAdmin() {
-    const status = await api('/api/admin/status', {admin: true});
-    view.adminStatus = status;
-    view.runs = Array.isArray(status.runs) ? status.runs : [];
-    view.runsUnavailable = !!status.runs_error;
-    renderAdminStatus();
-    // Report failures stay local to the dashboard and cannot turn a successful
-    // authentication or another management action into a failed request.
-    loadDeliveryReport();
+  function isCurrentAdminRefresh(generation, sequence) {
+    return generation === adminGeneration && sequence === adminRefreshSequence;
+  }
+  async function loadAdminStatus(generation, sequence) {
+    try {
+      const status = await api('/api/admin/status', {admin: true});
+      if (!isCurrentAdminRefresh(generation, sequence)) return;
+      view.adminStatus = status;
+      view.runs = Array.isArray(status.runs) ? status.runs : [];
+      view.runsUnavailable = !!status.runs_error;
+      renderAdminStatus();
+      renderDeliveryReport();
+    } catch (error) {
+      if (!isCurrentAdminRefresh(generation, sequence)) return;
+      view.adminStatusUnavailable = true;
+      renderAdminStatus();
+      throw error;
+    }
+  }
+  async function loadAdminSubscribers(generation, sequence) {
     try {
       const list = await api('/api/admin/subscribers', {admin: true});
+      if (!isCurrentAdminRefresh(generation, sequence)) return;
       view.subscribers = Array.isArray(list.subscribers) ? list.subscribers : [];
       view.subscribersUnavailable = false;
     } catch (error) {
-      if (error.stale || error.status !== 503) throw error;
+      if (!isCurrentAdminRefresh(generation, sequence)) return;
       view.subscribers = [];
       view.subscribersUnavailable = true;
+      if (error.status !== 503) throw error;
+    } finally {
+      if (isCurrentAdminRefresh(generation, sequence)) {
+        view.subscribersLoading = false;
+        renderSubscribers();
+        renderAdminStatus();
+      }
     }
-    renderSubscribers(); renderAdminStatus();
-    // Source settings have their own loading/error state and never block the
-    // existing subscriber, preview or delivery controls.
+  }
+  async function refreshAdmin() {
+    if (!hasAdminSession()) return;
+    const generation = adminGeneration;
+    const sequence = ++adminRefreshSequence;
+    view.adminStatusUnavailable = false;
+    view.subscribersLoading = true;
+    renderAdminStatus();
+    renderSubscribers();
+    const status = loadAdminStatus(generation, sequence);
+    const subscribers = loadAdminSubscribers(generation, sequence);
+    loadDeliveryReport();
     loadMoomooSettings();
+    await Promise.all([status, subscribers]);
   }
   async function pollPreview(attempt = 0) {
     try {
@@ -1708,7 +1767,6 @@
         if (!validAdminSession(result)) throw errorFor('adminEmailLoginUnavailable');
         adminToken = '';
         adminCookieSession = true;
-        await refreshAdmin();
         showAdminDashboard(generation);
       } catch (error) {
         if (error.stale || generation !== adminGeneration) return;
@@ -1719,6 +1777,7 @@
         if (generation === adminGeneration) { recoveryLoginBusy = false; renderEmailLogin(); }
       }
     });
+    $('admin-session-retry').addEventListener('click', restoreAdminSession);
     $('logout-button').addEventListener('click', logout);
     $('refresh-button').addEventListener('click', () => refreshAdmin().catch(error => {
       if (!error.stale) showError('action-status', error);
