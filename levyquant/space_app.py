@@ -54,15 +54,31 @@ _ORIGIN_HOST = re.compile(r"(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,6
 MAX_ADMIN_ORIGINS = 5
 
 
-def _search_fold(value: str) -> str:
-    """Case- and accent-insensitive search key, so 'LevyQuant' finds 'LévyQuant'.
+def _search_index(value: str) -> tuple[str, list[int]]:
+    """Case-, accent- and space-insensitive search key with a map back to `value`.
 
-    Combining marks are removed after canonical decomposition, which keeps each
-    precomposed letter at one position (é -> e), so excerpt offsets still line up.
-    CJK text is unchanged.
+    'LevyQuant', 'LévyQuant' and 'Lévy Quant' all fold to 'levyquant'. Each
+    character is decomposed, stripped of combining marks and casefolded on its
+    own, and whitespace is dropped; offsets[i] is the index in `value` of the
+    character that produced key[i], so excerpts can be cut from the original
+    text. CJK text is unchanged apart from removed spaces.
     """
-    decomposed = unicodedata.normalize("NFD", value)
-    return "".join(char for char in decomposed if not unicodedata.combining(char)).casefold()
+    key, offsets = [], []
+    for index, char in enumerate(value):
+        if char.isspace():
+            continue
+        decomposed = unicodedata.normalize("NFD", char)
+        folded = "".join(part for part in decomposed if not unicodedata.combining(part)).casefold()
+        for part in folded:
+            if not part.isspace():
+                key.append(part)
+                offsets.append(index)
+    return "".join(key), offsets
+
+
+def _search_fold(value: str) -> str:
+    """The search key alone (see _search_index)."""
+    return _search_index(value)[0]
 
 
 def additional_admin_origins(value) -> tuple[str, ...]:
@@ -590,7 +606,11 @@ class SpaceApplication:
             if needle and needle not in _search_fold(edition["subject"] + "\n" + edition["text"]):
                 continue
             plain = " ".join(edition["text"].split())
-            position = _search_fold(plain).find(needle) if needle else 0
+            position = 0
+            if needle:
+                key, offsets = _search_index(plain)
+                found = key.find(needle)
+                position = offsets[found] if found >= 0 else -1
             start = max(0, position - 70) if position >= 0 else 0
             excerpt = ("…" if start else "") + plain[start:start + 240]
             if start + 240 < len(plain):

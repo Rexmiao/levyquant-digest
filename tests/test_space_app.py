@@ -1229,10 +1229,26 @@ class ArchiveSearchFoldTests(unittest.TestCase):
         self.assertEqual(fold("LévyQuant Morning Briefing"), fold("LevyQuant MORNING briefing"))
         self.assertIn(fold("levyquant"), fold("Weekly LévyQuant note"))
         self.assertIn(fold("LÉVY"), fold("old LevyQuant edition"))
-        self.assertEqual(fold("美联储 Lévy"), "美联储 levy")
+        self.assertEqual(fold("美联储 Lévy"), "美联储levy")
+        index = space_app._search_index
         text = "Macro · LévyQuant · cobalt"
-        self.assertEqual(len(fold(text)), len(text))
-        self.assertEqual(text[fold(text).find("cobalt"):], "cobalt")
+        key, offsets = index(text)
+        self.assertEqual(len(key), len(offsets))
+        self.assertEqual(text[offsets[key.find("cobalt")]:], "cobalt")
+
+    def test_search_key_ignores_spaces_so_every_brand_spelling_matches(self):
+        fold = space_app._search_fold
+        for query in ("LevyQuant", "LévyQuant", "Lévy Quant", "levy  quant", "LÉVY QUANT"):
+            for text in ("Old LevyQuant edition", "LévyQuant Morning Briefing", "Lévy Quant Morning Briefing"):
+                with self.subTest(query=query, text=text):
+                    self.assertIn(fold(query), fold(text))
+        self.assertIn(fold("rate cut"), fold("Fed rate\ncut odds"))
+
+    def test_offsets_point_into_the_original_text_after_dropped_spaces_and_expanded_letters(self):
+        text = "Straße  ·  Lévy Quant notes"
+        key, offsets = space_app._search_index(text)
+        self.assertEqual(text[offsets[key.find("levyquant")]:], "Lévy Quant notes")
+        self.assertEqual(text[offsets[key.find("notes")]:], "notes")
 
 
 class ThemeBootstrapTests(unittest.TestCase):
