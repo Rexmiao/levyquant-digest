@@ -101,6 +101,8 @@ The administrator opens **`/admin`**, requests a code for an address on the priv
 
 Email verification and recovery sign-in open a **one-hour administrator session**. A secure, HTTP-only browser cookie restores the session after a page refresh and follows its original expiration time. Signing out revokes the session and clears the cookie. Existing clients can still authenticate protected management APIs using a Bearer credential. The recovery credential stays in the recovery sign-in form only long enough to verify it. Durable allowlist, login and session records use the existing encrypted state, where session tokens are stored as hashes.
 
+Open `/admin` in its own browser tab on the Space's own address. The session cookie is `SameSite=Strict`, so when the console is embedded in another page, such as the huggingface.co Space page, the browser does not keep the sign-in after a refresh. In that case the console shows a notice with a button to open it in a new tab. The cookie policy is intentionally not relaxed for embedding.
+
 Administrator requests trigger the existing GitHub mail worker. GitHub scheduling can delay delivery; the worker skips expired requests rather than sending stale codes. If a code expires before arrival, request a new code on the page. Knowing `/admin` alone grants no access.
 
 ### Delivery activity

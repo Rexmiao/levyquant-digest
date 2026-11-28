@@ -97,6 +97,8 @@ CLI 将最近 50 次安全运行元数据写入现有加密状态的 `reports/de
 
 邮箱验证码或恢复凭据验证成功后建立 1 小时管理员会话。浏览器通过安全、仅 HTTP 可读的 Cookie 恢复登录状态，刷新页面沿用原会话的有效期。退出会撤销服务端会话并清除 Cookie。恢复凭据仅用于验证。验证码、请求和会话的持久记录复用现有加密状态；worker 在预留成功后才投递，结果不确定或进程中断时不自动重发。
 
+请在单独的浏览器标签页中直接打开 Space 自己地址下的 `/admin`。会话 Cookie 为 `SameSite=Strict`，后台嵌在其他页面（例如 huggingface.co 的 Space 页面）中时，浏览器刷新后不会保留登录状态；此时后台会显示提示和“在新标签页打开后台”的按钮。为保持安全性，不为嵌入场景放宽 Cookie 策略。
+
 ### 统一管理 Moomoo 检索关键词
 
 部署含来源设置功能的版本后，在 HF 私人后台 `/admin` 修改并保存 Moomoo 关键词。设置写入现有 `delivery-state` 分支的 `settings/moomoo.json`，通过原有 `STATE_ENCRYPTION_KEY` 加密；HF 临时磁盘和浏览器存储不保存这份持久设置。GitHub 每日日报与 HF 新生成的预览读取同一份设置，`config/friend-sources.json` 仅提供首次未保存设置时的默认关键词。
