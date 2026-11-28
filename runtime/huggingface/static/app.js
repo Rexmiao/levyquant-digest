@@ -499,7 +499,7 @@
     highlightsMore: '+{count} more in the full edition',
     skipToEdition: 'Skip to the latest edition', datelineCity: 'New York',
     mastheadTagline: 'Macro · U.S. Equities · Quantitative Research', primaryNavLabel: 'Primary',
-    footerNavLabel: 'Footer', factWhenLabel: 'Delivered', factLanguageLabel: 'Languages',
+    footerNavLabel: 'Footer', footerMainSite: 'Lévy Quant main site', factWhenLabel: 'Delivered', factLanguageLabel: 'Languages',
     factLanguageValue: 'English, then 简体中文', factPriceLabel: 'Price', leadLabel: 'Lead story'
   });
   Object.assign(TEXT.zh, {
@@ -511,7 +511,7 @@
     highlightsMore: '完整版另有 {count} 条',
     skipToEdition: '跳到最新一期', datelineCity: '纽约',
     mastheadTagline: '宏观 · 美股 · 量化研究', primaryNavLabel: '主导航',
-    footerNavLabel: '页脚导航', factWhenLabel: '送达', factLanguageLabel: '语言',
+    footerNavLabel: '页脚导航', footerMainSite: 'Lévy Quant 主站', factWhenLabel: '送达', factLanguageLabel: '语言',
     factLanguageValue: '先英文，后简体中文', factPriceLabel: '价格', leadLabel: '头条'
   });
   const DELIVERY_COUNT_FIELDS = [
