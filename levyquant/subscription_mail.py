@@ -9,7 +9,8 @@ import os
 import re
 from urllib.parse import parse_qs, urlsplit
 
-from .smtp_delivery import DeliveryError, DeliveryUncertain, prepare_message, send_one
+from .smtp_delivery import (DeliveryError, DeliveryUncertain, mail_settings_from_env, mail_transport, prepare_message,
+                            send_one, send_with)
 from .subscriptions import REPOSITORY, SubscriptionError, service_from_env, validate_email
 
 
@@ -116,22 +117,36 @@ def run(environment: dict | None = None, *, service=None, transport=None, admin_
     environment = dict(os.environ if environment is None else environment)
     subscriptions_enabled = environment.get("SUBSCRIPTIONS_ENABLED", "").lower() == "true"
     production = service is None and admin_service is None
-    remote_configured = all(environment.get(name) for name in (
-        "GITHUB_REPOSITORY", "GITHUB_TOKEN", "STATE_ENCRYPTION_KEY", "SMTP_USERNAME", "SMTP_APP_PASSWORD"))
+    transport_name = mail_transport(environment)
+    if production and transport_name != "gmail":
+        # A requested non-Gmail transport must be complete: fail loudly rather than
+        # reporting "disabled" while administrator codes silently stop.
+        try:
+            mail_settings_from_env(environment)
+        except DeliveryError:
+            raise SubscriptionError("Mail transport settings are missing or invalid for queued delivery") from None
+    remote_configured = (all(environment.get(name) for name in (
+        "GITHUB_REPOSITORY", "GITHUB_TOKEN", "STATE_ENCRYPTION_KEY", "SMTP_USERNAME"))
+        and bool(environment.get("SES_SMTP_PASSWORD") if transport_name == "ses" else environment.get("SMTP_APP_PASSWORD")))
     if (not subscriptions_enabled and admin_service is None
             and (not production or not remote_configured)):
         return {"status": "disabled", "accepted": 0, "rejected": 0, "uncertain": 0, "skipped": 0}
     if environment.get("GITHUB_REPOSITORY") != REPOSITORY:
         raise SubscriptionError("Queued delivery is restricted to the intended repository")
-    sender = validate_email(environment.get("SMTP_USERNAME", ""))
-    password = environment.get("SMTP_APP_PASSWORD")
-    if not isinstance(password, str) or not password.strip():
-        raise SubscriptionError("SMTP_APP_PASSWORD is required for queued delivery")
+    try:
+        # Gmail by default; Amazon SES only when MAIL_TRANSPORT=ses is fully configured.
+        mail = mail_settings_from_env(environment)
+    except DeliveryError:
+        raise SubscriptionError("Mail transport settings are missing or invalid for queued delivery") from None
+    sender = validate_email(mail.from_address)
+    password = mail.password
     if subscriptions_enabled and service is None and production:
         service = service_from_env(environment)
     if admin_service is None and production:
         admin_service = admin_service_from_env(environment)
-    transport = transport or send_one
+    if transport is None:
+        transport = send_one if mail.transport == "gmail" else (
+            lambda message, *, username, password: send_with(message, mail))
     counts = {"accepted": 0, "rejected": 0, "uncertain": 0, "skipped": 0}
     # Ten-minute codes should not wait behind a batch of 48-hour confirmations.
     if admin_service is not None:

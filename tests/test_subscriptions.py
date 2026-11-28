@@ -280,6 +280,37 @@ class SubscriptionTests(unittest.TestCase):
         prepare_message("Subject", "<p>x</p>", "x", "sender@example.com", "reader@example.org", "edition-1",
                         unsubscribe_url=service.one_click_unsubscribe_url("reader@example.org"))
 
+    def test_queued_mail_uses_ses_when_switched_on_and_never_falls_back_to_gmail(self):
+        environment = {"SUBSCRIPTIONS_ENABLED": "true", "GITHUB_REPOSITORY": REPOSITORY, "GITHUB_TOKEN": "offline",
+                       "STATE_ENCRYPTION_KEY": "offline", "SMTP_USERNAME": "operator@example.org",
+                       "MAIL_TRANSPORT": "ses", "MAIL_FROM_ADDRESS": "briefing@levyquant.ai",
+                       "SES_SMTP_HOST": "email-smtp.us-east-1.amazonaws.com",
+                       "SES_SMTP_USERNAME": "AKIAEXAMPLEOFFLINE01", "SES_SMTP_PASSWORD": "offline-ses-secret"}
+        self.service.request_signup("reader@example.org")
+        with patch("levyquant.subscription_mail.send_with", return_value={"status": "accepted"}) as ses, \
+                patch("levyquant.subscription_mail.send_one") as gmail:
+            result = subscription_mail.run(environment, service=self.service)
+        self.assertEqual(result["accepted"], 1)
+        gmail.assert_not_called()
+        message, settings = ses.call_args.args
+        self.assertEqual((message["From"].addresses[0].addr_spec, settings.transport), ("briefing@levyquant.ai", "ses"))
+        self.assertIn("briefing@levyquant.ai", message.get_body(preferencelist=("plain",)).get_content())
+        broken = {**environment, "SES_SMTP_PASSWORD": "", "SMTP_APP_PASSWORD": "gmail-would-work"}
+        with patch("levyquant.subscription_mail.send_one") as gmail, self.assertRaises(SubscriptionError):
+            subscription_mail.run(broken, service=self.service)
+        gmail.assert_not_called()
+
+    def test_production_worker_fails_loudly_on_partial_ses_settings_even_when_signup_is_off(self):
+        environment = {"GITHUB_REPOSITORY": REPOSITORY, "GITHUB_TOKEN": "offline", "STATE_ENCRYPTION_KEY": "offline",
+                       "SMTP_USERNAME": "operator@example.org", "SMTP_APP_PASSWORD": "gmail-would-work",
+                       "MAIL_TRANSPORT": "ses", "MAIL_FROM_ADDRESS": "briefing@levyquant.ai",
+                       "SES_SMTP_HOST": "email-smtp.us-east-1.amazonaws.com", "SES_SMTP_USERNAME": "AKIAEXAMPLEOFFLINE01"}
+        with patch("levyquant.subscription_mail.service_from_env") as subscriptions, \
+                patch("levyquant.subscription_mail.admin_service_from_env") as admins, \
+                patch("levyquant.subscription_mail.send_one") as gmail, self.assertRaises(SubscriptionError):
+            subscription_mail.run(environment)
+        subscriptions.assert_not_called(); admins.assert_not_called(); gmail.assert_not_called()
+
     def test_invalid_email_base_url_repository_and_corrupt_state_fail_closed(self):
         for email in ("Name <reader@example.org>", "reader@example.org\r\nBcc: x@example.org", ".reader@example.org", "a..b@example.org", "reader@-example.org", "reader@example.org,second@example.org"):
             with self.subTest(email=email), self.assertRaises(SubscriptionError):

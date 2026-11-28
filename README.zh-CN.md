@@ -71,6 +71,19 @@ python -c "import base64,secrets; print(base64.urlsafe_b64encode(secrets.token_b
 
 手动 `send` 模式会真实向内部与普通订阅合并名单发送当日稿件，同样受启用开关、密钥与发送记录检查约束。暂停日报时将 `DIGEST_ENABLED` 改回 `false`。日常无需每天手动点 Run workflow。
 
+## 可选：通过 Amazon SES 发信
+
+除非仓库 Variable `MAIL_TRANSPORT` 设为 `ses`，邮件一律通过 Gmail 发送。准备 SES 不会改变现有发信：先在 Amazon SES 验证域名 `levyquant.ai`（DKIM 记录加在 Cloudflare，仅 DNS），申请正式发信权限，生成 SES SMTP 凭据，再新增：
+
+| 类型 | 名称 | 值 |
+| --- | --- | --- |
+| Variable | `SES_SMTP_HOST` | 所在区域的 SES SMTP 地址，例如 `email-smtp.us-east-1.amazonaws.com` |
+| Variable | `MAIL_FROM_ADDRESS` | 已验证域名下的地址，例如 `briefing@levyquant.ai` |
+| Secret | `SES_SMTP_USERNAME` | SES SMTP 用户名（不是邮箱地址） |
+| Secret | `SES_SMTP_PASSWORD` | SES SMTP 密码 |
+
+保留 `SMTP_USERNAME`：它仍是 `preview-email` 和 `smtp-test` 的运营者收件箱。设置 `MAIL_TRANSPORT=ses` 后先运行 `smtp-test`，确认运营者收件箱收到，再等下一次日报。任一 SES 设置缺失或格式不对时，运行会在连接前停止，不会悄悄改用 Gmail。删除 `MAIL_TRANSPORT`（或设为 `gmail`）即可切回。
+
 ## Hugging Face 公开订阅入口
 
 可部署包与配置见 `runtime/huggingface/README.md`。HF 提供公开预览、邮箱确认订阅、退订和受服务端鉴权保护的 `/admin`；Gmail SMTP 和纽约 07:00 的日程继续由 GitHub 执行。

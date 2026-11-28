@@ -17,7 +17,8 @@ from .editor import EditorError, editor_to_digest, generate_editor, translate_di
 from .delivery_reports import COUNT_FIELDS, ERROR_TYPES, RESULT_CODES, SUMMARY_FIELDS, record_run_report, summarize_edition
 from .feeds import DIAGNOSTIC_STATUSES, collect_sources
 from .render import RECIPIENT_FOOTER_SLOT, _safe_url, render_bilingual_digest, render_digest
-from .smtp_delivery import DeliveryError, DeliveryUncertain, SMTPSession, prepare_message, send_one
+from .smtp_delivery import (DeliveryError, DeliveryUncertain, SMTPSession, mail_settings_from_env,
+                            prepare_message, send_one)
 from .archive import publish_edition
 from .sources import enrich_articles
 from .source_settings import (
@@ -99,6 +100,23 @@ def validate_config(config: dict) -> None:
             raise ConfigurationError(f"Invalid {name}")
 
 
+def mail_settings(environment: dict, config: dict):
+    """Resolve Gmail (default) or Amazon SES sending settings before any network use."""
+    try:
+        return mail_settings_from_env(environment, operator_fallback=config.get("sender"))
+    except DeliveryError as error:
+        # Messages name settings only, never their values.
+        raise ConfigurationError(str(error)) from None
+
+
+def _send_test(message, mail) -> dict:
+    """Operator-only preview or SMTP self-test through the configured transport."""
+    if mail.transport == "gmail":
+        return send_one(message, username=mail.username, password=mail.password)
+    with SMTPSession(mail.username, mail.password, from_address=mail.from_address, host=mail.host) as session:
+        return session.send(message)
+
+
 def preflight(config: dict, mode: str, environment: dict) -> list[str]:
     if mode not in ("preview", "preview-email", "send", "smtp-test"):
         raise ConfigurationError("Unsupported run mode")
@@ -111,12 +129,8 @@ def preflight(config: dict, mode: str, environment: dict) -> list[str]:
         if not environment.get("GEMINI_API_KEY"):
             raise ConfigurationError("GEMINI_API_KEY secret is missing")
     if mode in ("send", "smtp-test", "preview-email"):
-        if not environment.get("SMTP_APP_PASSWORD"):
-            raise ConfigurationError("SMTP_APP_PASSWORD secret is missing")
-        sender = environment.get("SMTP_USERNAME") or config.get("sender")
-        if not sender:
-            raise ConfigurationError("SMTP_USERNAME secret is missing")
-        recipients_from(json.dumps([sender]))
+        settings = mail_settings(environment, config)
+        recipients_from(json.dumps([settings.operator_address]))
     if mode == "send":
         if not environment.get("GITHUB_TOKEN") or not environment.get("GITHUB_REPOSITORY"):
             raise ConfigurationError("Live delivery requires durable encrypted state in the intended GitHub repository")
@@ -298,7 +312,7 @@ def claim_run_date(store, environment: dict, date: str, now: datetime) -> None:
 
 def deliver_edition(store, path: str, edition: dict, recipients: list[str], *, sender: str,
                     password: str, execution_id: str, transport=None, subscription_service=None,
-                    internal_recipients: list[str] | None = None) -> dict:
+                    internal_recipients: list[str] | None = None, mail=None) -> dict:
     """Reserve, recheck opt-outs, then submit once; preserve ambiguous outcomes.
 
     Recipients are handled in batches of DELIVERY_BATCH_SIZE: one write reserves
@@ -420,7 +434,12 @@ def deliver_edition(store, path: str, edition: dict, recipients: list[str], *, s
         # One verified login reused across this run; created lazily so a bad
         # credential is recorded per recipient exactly like send_one.
         if not session:
-            session.append(SMTPSession(username, password))
+            if mail is not None and mail.transport != "gmail":
+                # Amazon SES: access-key login, fixed endpoint, @levyquant.ai From (= sender).
+                session.append(SMTPSession(mail.username, mail.password, from_address=mail.from_address,
+                                           host=mail.host))
+            else:
+                session.append(SMTPSession(username, password))
         return session[0].send(message)
 
     if transport is None:
@@ -570,14 +589,14 @@ def run(config: dict, mode: str, environment: dict, output: Path, *, moomoo_sett
     if scheduled_send and local_now.hour < 7:
         return {"mode": mode, "status": "scheduled_window_not_open", "date": date}
     output.mkdir(parents=True, exist_ok=True)
+    mail = mail_settings(environment, config) if mode in ("send", "smtp-test", "preview-email") else None
     if mode == "smtp-test":
-        sender = config["sender"]
         message = prepare_message("[TEST] LévyQuant cloud SMTP connection",
             "<p>LévyQuant cloud SMTP connection test. This is not a daily news digest.</p>",
             "LévyQuant cloud SMTP connection test. This is not a daily news digest.",
-            sender, sender, "smtp-test-" + environment.get("GITHUB_RUN_ID", now.isoformat()))
-        receipt = send_one(message, username=sender, password=environment["SMTP_APP_PASSWORD"])
-        return {"mode": mode, "status": receipt["status"], "test_to_sender_only": True}
+            mail.from_address, mail.operator_address, "smtp-test-" + environment.get("GITHUB_RUN_ID", now.isoformat()))
+        receipt = _send_test(message, mail)
+        return {"mode": mode, "status": receipt["status"], "test_to_sender_only": True, "transport": mail.transport}
 
     subscription_service = None
     if mode == "send":
@@ -709,15 +728,15 @@ def run(config: dict, mode: str, environment: dict, output: Path, *, moomoo_sett
                 "article_count": edition["article_count"], "section_count": edition["section_count"],
                 "moomoo_settings_revision": edition.get("moomoo_settings_revision", 0)}
     if mode == "preview-email":
-        sender = config["sender"]
         message = prepare_message("[PREVIEW] " + edition["subject"], edition["html"], edition["text"],
-                                  sender, sender, "preview-" + environment.get("GITHUB_RUN_ID", now.isoformat()))
-        receipt = send_one(message, username=sender, password=environment["SMTP_APP_PASSWORD"])
+                                  mail.from_address, mail.operator_address,
+                                  "preview-" + environment.get("GITHUB_RUN_ID", now.isoformat()))
+        receipt = _send_test(message, mail)
         return {"mode": mode, "status": "preview_email_" + receipt["status"], "date": date,
                 "test_to_sender_only": True, "article_count": edition["article_count"],
                 "section_count": edition["section_count"]}
-    receipt = deliver_edition(store, edition_path, edition, recipients, sender=config["sender"],
-                              password=environment["SMTP_APP_PASSWORD"],
+    receipt = deliver_edition(store, edition_path, edition, recipients, sender=mail.from_address,
+                              password=mail.password, mail=mail,
                               execution_id=environment.get("GITHUB_RUN_ID", "manual"),
                               subscription_service=subscription_service,
                               internal_recipients=recipients_from(environment["DIGEST_INTERNAL_RECIPIENTS"]) if subscription_service else None)

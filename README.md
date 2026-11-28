@@ -71,6 +71,19 @@ In **Actions → LevyQuant Daily Digest → Run workflow**, choose the default b
 
 Manual `send` mode really delivers the day's edition to the merged internal and regular lists, subject to the same enable switch, key and delivery-record checks. To pause the digest, set `DIGEST_ENABLED` back to `false`. There is no need to click Run workflow every day.
 
+## Optional: send through Amazon SES
+
+Mail goes through Gmail unless the repository Variable `MAIL_TRANSPORT` is `ses`. To prepare SES without changing delivery, verify the domain `levyquant.ai` in Amazon SES (DKIM records in Cloudflare, DNS only), request production access, create SES SMTP credentials, then add:
+
+| Kind | Name | Value |
+| --- | --- | --- |
+| Variable | `SES_SMTP_HOST` | the SES SMTP endpoint of your region, for example `email-smtp.us-east-1.amazonaws.com` |
+| Variable | `MAIL_FROM_ADDRESS` | an address on the verified domain, for example `briefing@levyquant.ai` |
+| Secret | `SES_SMTP_USERNAME` | the SES SMTP user name (not an email address) |
+| Secret | `SES_SMTP_PASSWORD` | the SES SMTP password |
+
+Keep `SMTP_USERNAME`: it stays the operator inbox for `preview-email` and `smtp-test`. Set `MAIL_TRANSPORT=ses`, run `smtp-test`, check the operator inbox, and only then wait for the next daily send. If any SES setting is missing or malformed, runs stop before connecting; nothing falls back to Gmail. Remove `MAIL_TRANSPORT` (or set it to `gmail`) to switch back.
+
 ## Hugging Face public subscription portal
 
 The deployable bundle and configuration are described in `runtime/huggingface/README.md`. HF provides the public preview, email-confirmed subscription, unsubscribe and a server-authenticated `/admin`; Gmail SMTP and the 07:00 New York schedule still run on GitHub.

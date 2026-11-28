@@ -9,6 +9,7 @@ handed over; SMTPSession only reopens a dropped, reused connection before DATA.
 
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 from email import policy
 from email.message import EmailMessage
 from email.utils import formataddr, formatdate, getaddresses
@@ -181,7 +182,9 @@ def _single_address(message: EmailMessage, field: str) -> str:
     return _address(parsed[0][1], field)
 
 
-def _envelope(message: EmailMessage, username: str) -> tuple[str, str, str, bytes]:
+def _envelope(message: EmailMessage, from_address: str) -> tuple[str, str, str, bytes]:
+    """Validate the prepared message; its single From must equal from_address."""
+    username = from_address
     if not isinstance(message, EmailMessage):
         raise DeliveryError("Use prepare_message to create the message.", stage="validation")
     for name, value in message.raw_items():
@@ -211,13 +214,78 @@ def _validated_password(password) -> str:
     return password
 
 
-def _open_client():
+def _open_client(host: str = SMTP_HOST):
     return smtplib.SMTP_SSL(
-        SMTP_HOST,
+        host,
         SMTP_PORT,
         context=ssl.create_default_context(),
         timeout=SMTP_TIMEOUT_SECONDS,
     )
+
+
+# Amazon SES SMTP endpoints, e.g. email-smtp.us-east-1.amazonaws.com (port 465, implicit TLS).
+SES_HOST = re.compile(r"email-smtp\.[a-z]{2}(?:-[a-z]+)+-[0-9]\.amazonaws\.com\Z")
+# SES SMTP usernames are access-key style identifiers, never an email address.
+_SES_USERNAME = re.compile(r"[A-Z0-9]{16,128}\Z")
+# The only domain SES may send From; it must be verified in SES with DKIM.
+SES_FROM_DOMAINS = frozenset({"levyquant.ai"})
+MAIL_TRANSPORTS = ("gmail", "ses")
+
+
+@dataclass(frozen=True)
+class MailSettings:
+    """Resolved sending configuration. The password never appears in repr."""
+    transport: str
+    host: str
+    username: str
+    password: str = field(repr=False)
+    from_address: str
+    operator_address: str
+
+
+def mail_transport(environment) -> str:
+    """The configured transport name; unset, empty or whitespace means gmail."""
+    return (environment.get("MAIL_TRANSPORT") or "").strip().lower() or "gmail"
+
+
+def mail_settings_from_env(environment, *, operator_fallback: str | None = None) -> MailSettings:
+    """Resolve MAIL_TRANSPORT (default gmail) without any network access.
+
+    gmail: SMTP_USERNAME is login, From and operator inbox; SMTP_APP_PASSWORD.
+    ses:   SES_SMTP_HOST / SES_SMTP_USERNAME / SES_SMTP_PASSWORD and an
+           @levyquant.ai MAIL_FROM_ADDRESS; SMTP_USERNAME stays the operator
+           inbox for preview and SMTP self-tests. Nothing falls back silently.
+    Errors are DeliveryError(stage="validation") and never contain values.
+    """
+    transport = mail_transport(environment)
+    if transport not in MAIL_TRANSPORTS:
+        raise DeliveryError("MAIL_TRANSPORT must be gmail or ses.", stage="validation")
+    operator = environment.get("SMTP_USERNAME") or operator_fallback or ""
+    operator = _address(operator, "SMTP_USERNAME")
+    if transport == "gmail":
+        password = _validated_password(environment.get("SMTP_APP_PASSWORD"))
+        return MailSettings("gmail", SMTP_HOST, operator, password, operator, operator)
+    host = (environment.get("SES_SMTP_HOST") or "").strip().lower()
+    if not SES_HOST.fullmatch(host):
+        raise DeliveryError("SES_SMTP_HOST must be an Amazon SES SMTP endpoint.", stage="validation")
+    username = (environment.get("SES_SMTP_USERNAME") or "").strip()
+    if not _SES_USERNAME.fullmatch(username):
+        raise DeliveryError("SES_SMTP_USERNAME is missing or malformed.", stage="validation")
+    # Pasted secrets often carry a trailing newline; SES SMTP passwords never contain whitespace.
+    password = (environment.get("SES_SMTP_PASSWORD") or "").strip()
+    if not password:
+        raise DeliveryError("SES_SMTP_PASSWORD is missing.", stage="validation")
+    if _CONTROL.search(password) or any(char.isspace() for char in password):
+        raise DeliveryError("SES_SMTP_PASSWORD is malformed.", stage="validation")
+    from_address = _ses_from(environment.get("MAIL_FROM_ADDRESS") or "")
+    return MailSettings("ses", host, username, password, from_address, operator)
+
+
+def _ses_from(value: str) -> str:
+    address = _address(value, "MAIL_FROM_ADDRESS")
+    if address.rsplit("@", 1)[1] not in SES_FROM_DOMAINS:
+        raise DeliveryError("MAIL_FROM_ADDRESS must use the verified sending domain.", stage="validation")
+    return address
 
 
 class _StaleConnection(Exception):
@@ -240,8 +308,25 @@ class SMTPSession:
 
     MAX_MESSAGES_PER_CONNECTION = 20
 
-    def __init__(self, username: str, password: str) -> None:
-        self.username = _address(username, "SMTP username")
+    def __init__(self, username: str, password: str, *, from_address: str | None = None,
+                 host: str = SMTP_HOST) -> None:
+        # Gmail (default): the login is the From address. Amazon SES: an
+        # access-key style login, a fixed endpoint and an @levyquant.ai From.
+        if host == SMTP_HOST:
+            self.username = _address(username, "SMTP username")
+            self.from_address = self.username if from_address is None else _address(from_address, "From address")
+            if self.from_address != self.username:
+                raise DeliveryError("SMTP username must match the session From address.", stage="validation")
+        elif isinstance(host, str) and SES_HOST.fullmatch(host):
+            if not isinstance(username, str) or not _SES_USERNAME.fullmatch(username):
+                raise DeliveryError("SES SMTP username is malformed.", stage="validation")
+            if from_address is None:
+                raise DeliveryError("Amazon SES requires an explicit From address.", stage="validation")
+            self.username = username
+            self.from_address = _ses_from(from_address)
+        else:
+            raise DeliveryError("Only Gmail or Amazon SES SMTP endpoints are allowed.", stage="validation")
+        self.host = host
         self._password = _validated_password(password)
         self._client = None
         self._sent_on_connection = 0
@@ -266,11 +351,19 @@ class SMTPSession:
 
     def send(self, message: EmailMessage, *, username: str | None = None, password: str | None = None) -> dict:
         """Same contract as send_one; username/password, if given, must match the session."""
-        if username is not None and _address(username, "SMTP username") != self.username:
-            raise DeliveryError("SMTP username must match the session account.", stage="validation")
+        if username is not None:
+            # Callers may name either the login or the From address; both must match this session.
+            if not isinstance(username, str):
+                raise DeliveryError("SMTP username must match the session account.", stage="validation")
+            if "@" in username:
+                matches = _address(username, "SMTP username") == self.from_address
+            else:
+                matches = username.strip() == self.username
+            if not matches:
+                raise DeliveryError("SMTP username must match the session account.", stage="validation")
         if password is not None and _validated_password(password) != self._password:
             raise DeliveryError("SMTP password must match the session account.", stage="validation")
-        sender, recipient, message_id, wire = _envelope(message, self.username)
+        sender, recipient, message_id, wire = _envelope(message, self.from_address)
         try:
             return self._transact(sender, recipient, message_id, wire)
         except _StaleConnection:
@@ -284,7 +377,7 @@ class SMTPSession:
             if self._client is not None and self._sent_on_connection >= self.MAX_MESSAGES_PER_CONNECTION:
                 self.close()
             if self._client is None:
-                self._client = _open_client()
+                self._client = _open_client(self.host)
                 self.connections_opened += 1
                 stage = "greeting"
                 self._client.ehlo_or_helo_if_needed()
@@ -359,3 +452,20 @@ def send_one(message: EmailMessage, *, username: str, password: str) -> dict:
     """
     with SMTPSession(username, password) as session:
         return session.send(message)
+
+
+def send_with(message: EmailMessage, settings: MailSettings) -> dict:
+    """Submit one prepared message through the resolved Gmail or SES settings."""
+    if settings.transport == "gmail":
+        return send_one(message, username=settings.username, password=settings.password)
+    with SMTPSession(settings.username, settings.password, from_address=settings.from_address,
+                     host=settings.host) as session:
+        return session.send(message)
+
+
+def session_for(settings: MailSettings) -> SMTPSession:
+    """A reusable session for the resolved settings (Gmail keeps the legacy call)."""
+    if settings.transport == "gmail":
+        return SMTPSession(settings.username, settings.password)
+    return SMTPSession(settings.username, settings.password, from_address=settings.from_address,
+                       host=settings.host)

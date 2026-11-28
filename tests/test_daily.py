@@ -9,7 +9,7 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
-from unittest.mock import Mock, patch
+from unittest.mock import MagicMock, Mock, patch
 from urllib.parse import parse_qs, urlsplit
 
 from levyquant import daily
@@ -893,6 +893,45 @@ class InputAndPipelineTests(unittest.TestCase):
         daily.run(self.config, "preview-email", self.environment, self.root / "private-preview")
         self.assertIsNone(self.smtp.call_args.args[0]["List-Unsubscribe"])
         self.assertIsNone(self.smtp.call_args.args[0]["List-Unsubscribe-Post"])
+
+    def ses_environment(self):
+        environment = {**self.environment, "MAIL_TRANSPORT": "ses", "MAIL_FROM_ADDRESS": "briefing@levyquant.ai",
+                       "SES_SMTP_HOST": "email-smtp.us-east-1.amazonaws.com",
+                       "SES_SMTP_USERNAME": "AKIAEXAMPLEOFFLINE01", "SES_SMTP_PASSWORD": "offline-ses-secret"}
+        environment.pop("SMTP_APP_PASSWORD")
+        return environment
+
+    def test_ses_switch_routes_self_tests_and_formal_send_from_the_brand_address(self):
+        environment = self.ses_environment()
+        session = MagicMock()
+        session.send = self.smtp
+        session.__enter__.return_value = session
+        with patch("levyquant.daily.SMTPSession", return_value=session) as factory:
+            self.assertEqual(daily.run(self.config, "smtp-test", environment, self.root / "smtp")["transport"], "ses")
+            message = self.smtp.call_args.args[0]
+            self.assertEqual((message["From"].addresses[0].addr_spec, str(message["To"])),
+                             ("briefing@levyquant.ai", environment["SMTP_USERNAME"]))
+            self.smtp.reset_mock()
+            result = daily.run(self.config, "send", environment, self.root / "outputs")
+        self.assertEqual(result["accepted"], len(RECIPIENTS))
+        self.assertEqual({call.args[0]["From"].addresses[0].addr_spec for call in self.smtp.call_args_list},
+                         {"briefing@levyquant.ai"})
+        for call in factory.call_args_list:
+            self.assertEqual(call.args, ("AKIAEXAMPLEOFFLINE01", "offline-ses-secret"))
+            self.assertEqual(call.kwargs, {"from_address": "briefing@levyquant.ai",
+                                           "host": "email-smtp.us-east-1.amazonaws.com"})
+
+    def test_incomplete_ses_settings_stop_before_any_mail_and_never_use_gmail(self):
+        for missing in ("SES_SMTP_PASSWORD", "SES_SMTP_USERNAME", "SES_SMTP_HOST", "MAIL_FROM_ADDRESS"):
+            environment = self.ses_environment()
+            environment.pop(missing)
+            environment["SMTP_APP_PASSWORD"] = "gmail-would-work"
+            for mode in ("smtp-test", "send"):
+                with self.subTest(missing=missing, mode=mode), self.assertRaises(daily.ConfigurationError) as caught:
+                    daily.run(self.config, mode, environment, self.root / ("blocked-" + missing + mode))
+                self.assertNotIn("offline-ses-secret", str(caught.exception))
+        self.smtp.assert_not_called()
+        self.smtp_session.assert_not_called()
 
     def test_gha_records_running_and_completed_safe_reports_for_all_modes(self):
         statuses = {"preview": "preview_ready_no_mail_sent", "preview-email": "preview_email_accepted",

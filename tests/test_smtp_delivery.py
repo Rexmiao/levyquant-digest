@@ -238,6 +238,89 @@ class SMTPDeliveryTests(unittest.TestCase):
         self.client.data.assert_called_once()
 
 
+SES_ENV = {"MAIL_TRANSPORT": "ses", "SMTP_USERNAME": "operator@example.com",
+           "SES_SMTP_HOST": "email-smtp.us-east-1.amazonaws.com", "SES_SMTP_USERNAME": "AKIAEXAMPLEOFFLINE01",
+           "SES_SMTP_PASSWORD": "offline-ses-secret-value", "MAIL_FROM_ADDRESS": "briefing@levyquant.ai"}
+
+
+class MailSettingsTests(unittest.TestCase):
+    def test_gmail_is_the_default_and_unchanged(self):
+        settings = delivery.mail_settings_from_env({"SMTP_USERNAME": "Sender@Example.com", "SMTP_APP_PASSWORD": "app-pass"})
+        self.assertEqual((settings.transport, settings.host, settings.username, settings.from_address, settings.operator_address),
+                         ("gmail", "smtp.gmail.com", "sender@example.com", "sender@example.com", "sender@example.com"))
+        self.assertNotIn("app-pass", repr(settings))
+
+    def test_complete_ses_settings_resolve_and_hide_the_password(self):
+        settings = delivery.mail_settings_from_env(SES_ENV)
+        self.assertEqual((settings.transport, settings.host, settings.username, settings.from_address, settings.operator_address),
+                         ("ses", "email-smtp.us-east-1.amazonaws.com", "AKIAEXAMPLEOFFLINE01", "briefing@levyquant.ai",
+                          "operator@example.com"))
+        self.assertNotIn("offline-ses-secret-value", repr(settings))
+
+    def test_incomplete_or_unsafe_ses_settings_fail_closed_without_echoing_values(self):
+        changes = [{"MAIL_TRANSPORT": "sendgrid"}, {"SES_SMTP_HOST": ""}, {"SES_SMTP_HOST": "smtp.evil.example"},
+                   {"SES_SMTP_HOST": "email-smtp.us-east-1.amazonaws.com.evil.example"}, {"SES_SMTP_USERNAME": ""},
+                   {"SES_SMTP_USERNAME": "someone@example.com"}, {"SES_SMTP_PASSWORD": ""},
+                   {"MAIL_FROM_ADDRESS": ""}, {"MAIL_FROM_ADDRESS": "briefing@levyquant.ai.evil.example"},
+                   {"MAIL_FROM_ADDRESS": "someone@gmail.example"}, {"SMTP_USERNAME": ""}]
+        for change in changes:
+            with self.subTest(change=change), self.assertRaises(delivery.DeliveryError) as caught:
+                delivery.mail_settings_from_env({**SES_ENV, **change})
+            self.assertEqual(caught.exception.stage, "validation")
+            for secret in ("offline-ses-secret-value", "AKIAEXAMPLEOFFLINE01"):
+                self.assertNotIn(secret, str(caught.exception))
+
+    def test_blank_transport_means_gmail_and_pasted_ses_password_newline_is_tolerated(self):
+        for value in ("", "   ", None, "GMAIL"):
+            with self.subTest(value=value):
+                environment = {"SMTP_USERNAME": "sender@example.com", "SMTP_APP_PASSWORD": "app-pass"}
+                if value is not None:
+                    environment["MAIL_TRANSPORT"] = value
+                self.assertEqual(delivery.mail_settings_from_env(environment).transport, "gmail")
+        settings = delivery.mail_settings_from_env({**SES_ENV, "MAIL_TRANSPORT": " SES ",
+                                                    "SES_SMTP_PASSWORD": "offline-ses-secret-value\n"})
+        self.assertEqual((settings.transport, settings.password), ("ses", "offline-ses-secret-value"))
+        with self.assertRaisesRegex(delivery.DeliveryError, "malformed"):
+            delivery.mail_settings_from_env({**SES_ENV, "SES_SMTP_PASSWORD": "two words"})
+
+    def test_gmail_without_app_password_does_not_fall_back_or_connect(self):
+        with self.assertRaises(delivery.DeliveryError):
+            delivery.mail_settings_from_env({"SMTP_USERNAME": "sender@example.com"})
+
+
+class SESSessionTests(unittest.TestCase):
+    def setUp(self):
+        self.client = Mock()
+        self.client.mail.return_value = (250, b"ok")
+        self.client.rcpt.return_value = (250, b"ok")
+        self.client.data.return_value = (250, b"ok")
+        patcher = patch.object(delivery.smtplib, "SMTP_SSL", return_value=self.client)
+        self.smtp = patcher.start()
+        self.addCleanup(patcher.stop)
+        self.settings = delivery.mail_settings_from_env(SES_ENV)
+
+    def test_ses_logs_in_with_the_access_key_and_sends_from_the_brand_address(self):
+        message = delivery.prepare_message("Subject", "<p>x</p>", "x", "briefing@levyquant.ai", "reader@example.org", "edition-1")
+        self.assertTrue(str(message["Message-ID"]).endswith("@levyquant.ai>"))
+        result = delivery.send_with(message, self.settings)
+        self.assertEqual(result["status"], "accepted")
+        self.assertEqual(self.smtp.call_args.args, ("email-smtp.us-east-1.amazonaws.com", 465))
+        self.client.login.assert_called_once_with("AKIAEXAMPLEOFFLINE01", "offline-ses-secret-value")
+        self.client.mail.assert_called_once_with("briefing@levyquant.ai")
+        self.client.rcpt.assert_called_once_with("reader@example.org")
+
+    def test_ses_session_rejects_other_from_addresses_hosts_and_missing_from(self):
+        wrong_from = delivery.prepare_message("S", "<p>x</p>", "x", "someone@gmail.example", "reader@example.org", "e")
+        with self.assertRaisesRegex(delivery.DeliveryError, "must match"):
+            delivery.send_with(wrong_from, self.settings)
+        for kwargs in ({"from_address": "briefing@levyquant.ai", "host": "smtp.evil.example"},
+                       {"host": "email-smtp.us-east-1.amazonaws.com"},
+                       {"from_address": "briefing@other.example", "host": "email-smtp.us-east-1.amazonaws.com"}):
+            with self.subTest(kwargs=kwargs), self.assertRaises(delivery.DeliveryError):
+                delivery.SMTPSession("AKIAEXAMPLEOFFLINE01", "offline-ses-secret-value", **kwargs)
+        self.smtp.assert_not_called()
+
+
 class SMTPSessionTests(unittest.TestCase):
     def setUp(self):
         self.sender = "sender@example.com"
