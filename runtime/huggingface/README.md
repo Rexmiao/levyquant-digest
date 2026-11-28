@@ -103,6 +103,8 @@ Email verification and recovery sign-in open a **one-hour administrator session*
 
 Open `/admin` in its own browser tab on the Space's own address. The session cookie is `SameSite=Strict`, so when the console is embedded in another page, such as the huggingface.co Space page, the browser does not keep the sign-in after a refresh. In that case the console shows a notice with a button to open it in a new tab. The cookie policy is intentionally not relaxed for embedding.
 
+To sign in to the admin on a custom domain attached to the Space (for example `https://daily.levyquant.ai`), add the Space variable `DIGEST_ADMIN_ORIGINS` with that exact origin: `https://`, lowercase host, no trailing slash or port; separate up to five origins with commas. The canonical `DIGEST_PUBLIC_BASE_URL` stays trusted, and any malformed entry trusts no extra origin. Sessions are per host, so signing in on one address does not sign in on the other. Emailed links keep using `DIGEST_PUBLIC_BASE_URL`.
+
 Administrator requests trigger the existing GitHub mail worker. GitHub scheduling can delay delivery; the worker skips expired requests rather than sending stale codes. If a code expires before arrival, request a new code on the page. Knowing `/admin` alone grants no access.
 
 ### Delivery activity

@@ -42,6 +42,39 @@ _WORKFLOWS = frozenset(("daily-digest.yml", "subscription-mail.yml"))
 _FIELDS = ("date", "subject", "html", "text")
 _ADMIN_COOKIE = "__Host-lq_admin"
 _SESSION_TOKEN = re.compile(r"lq_session_[A-Za-z0-9_-]{43}\Z")
+_ORIGIN_HOST = re.compile(r"(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}\Z")
+MAX_ADMIN_ORIGINS = 5
+
+
+def additional_admin_origins(value) -> tuple[str, ...]:
+    """Parse DIGEST_ADMIN_ORIGINS: extra exact HTTPS origins (for example a custom
+    domain) that may make browser admin writes besides DIGEST_PUBLIC_BASE_URL.
+
+    Each entry must be exactly ``https://<lowercase host>`` with no port, path,
+    credentials, query or fragment. Any malformed entry, or more than
+    MAX_ADMIN_ORIGINS entries, makes the whole list untrusted (fail closed), so
+    only the canonical public origin remains trusted.
+    """
+    if not isinstance(value, str) or not value.strip() or len(value) > 1024:
+        return ()
+    origins = []
+    for item in value.split(","):
+        item = item.strip()
+        try:
+            parsed = urlsplit(item)
+            host = parsed.hostname or ""
+            valid = (parsed.scheme == "https" and parsed.username is None and parsed.password is None
+                     and parsed.port is None and parsed.path == "" and not parsed.query and not parsed.fragment
+                     and len(host) <= 253 and _ORIGIN_HOST.fullmatch(host) is not None
+                     and item == "https://" + host)
+        except ValueError:
+            valid = False
+        if not valid:
+            return ()
+        origins.append(item)
+    if len(origins) > MAX_ADMIN_ORIGINS:
+        return ()
+    return tuple(dict.fromkeys(origins))
 _PUBLIC_MUTATIONS = frozenset(("/api/subscribe", "/api/confirm", "/api/unsubscribe",
                               "/api/admin-login/request", "/api/admin-login/verify"))
 _EDITOR_ISSUE_CODES = frozenset((
@@ -323,7 +356,12 @@ class SpaceApplication:
             validate_public_base_url(self.environment.get("DIGEST_PUBLIC_BASE_URL", ""))
         except SubscriptionError:
             missing.append("DIGEST_PUBLIC_BASE_URL")
-        result = {"configured": not missing, "missing": missing, "runs": []}
+        raw_origins = self.environment.get("DIGEST_ADMIN_ORIGINS", "")
+        extra_origins = additional_admin_origins(raw_origins)
+        result = {"configured": not missing, "missing": missing, "runs": [],
+                  # Counts and a flag only: never echo the configured origins.
+                  "admin_origins": {"extra_trusted": len(extra_origins),
+                                    "invalid": bool(isinstance(raw_origins, str) and raw_origins.strip()) and not extra_origins}}
         if "GITHUB_TOKEN" in missing or "GITHUB_REPOSITORY" in missing or "STATE_ENCRYPTION_KEY" in missing:
             return result
         try:
@@ -922,13 +960,18 @@ class SpaceRequestHandler(BaseHTTPRequestHandler):
         return values[0] if values and _SESSION_TOKEN.fullmatch(values[0]) else None
 
     def _require_same_origin(self):
-        # Only the operator-configured canonical HTTPS origin is trusted;
-        # forwarded Host/Proto and the inbound Host header cannot grant access.
+        # Only operator-configured HTTPS origins are trusted: the canonical
+        # DIGEST_PUBLIC_BASE_URL plus exact DIGEST_ADMIN_ORIGINS entries (for a
+        # custom domain). Forwarded Host/Proto and the inbound Host header never
+        # grant access, and a malformed extra list trusts no extra origin.
+        environment = self.server.application.environment
         try:
-            expected = validate_public_base_url(self.server.application.environment.get("DIGEST_PUBLIC_BASE_URL", ""))
+            expected = validate_public_base_url(environment.get("DIGEST_PUBLIC_BASE_URL", ""))
         except SubscriptionError:
             raise AppError(503, "not_configured") from None
-        if self.headers.get_all("Origin", []) != [expected]:
+        trusted = {expected, *additional_admin_origins(environment.get("DIGEST_ADMIN_ORIGINS", ""))}
+        origins = self.headers.get_all("Origin", [])
+        if len(origins) != 1 or origins[0] not in trusted:
             raise AppError(403, "same_origin_required")
         fetch_site = self.headers.get("Sec-Fetch-Site")
         if fetch_site is not None and fetch_site != "same-origin":

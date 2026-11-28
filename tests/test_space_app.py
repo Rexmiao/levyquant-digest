@@ -307,6 +307,19 @@ class AppTests(unittest.TestCase):
         for value in ENV.values():
             if value not in ("true", "https://example.hf.space"):
                 self.assertNotIn(value, json.dumps(result))
+        self.assertEqual(result["admin_origins"], {"extra_trusted": 0, "invalid": False})
+
+    def test_admin_status_reports_admin_origin_count_or_invalid_flag_without_values(self):
+        self.github.return_value = {"workflow_runs": []}
+        for value, expected in (("https://daily.example-news.ai", {"extra_trusted": 1, "invalid": False}),
+                                ("https://daily.example-news.ai/", {"extra_trusted": 0, "invalid": True}),
+                                ("", {"extra_trusted": 0, "invalid": False})):
+            with self.subTest(value=value):
+                self.app.environment["DIGEST_ADMIN_ORIGINS"] = value
+                _, result = self.request("GET", "/api/admin/status")
+                self.assertEqual(result["admin_origins"], expected)
+                self.assertTrue(result["configured"])
+                self.assertNotIn("example-news", json.dumps(result))
 
     def test_delivery_report_distinguishes_real_receipts_preview_and_unknown_legacy_runs(self):
         frozen = {**PREVIEW, "edition_id": "levyquant-morning-" + PREVIEW["date"], "mode": "live", "validated": True,
@@ -671,6 +684,66 @@ class HttpBoundaryTests(unittest.TestCase):
         # Existing trusted stateless Bearer callers do not need browser headers.
         self.assertEqual(self.request("POST", "/api/admin/logout", "{}", {
             "Authorization": AUTH, "Content-Type": "application/json"})[0], 200)
+
+    def test_configured_custom_domain_origin_can_sign_in_and_write_alongside_canonical_origin(self):
+        self.persistent_auth()
+        self.app.environment["DIGEST_ADMIN_ORIGINS"] = "https://daily.example-news.ai"
+        for origin in ("https://daily.example-news.ai", ENV["DIGEST_PUBLIC_BASE_URL"]):
+            with self.subTest(origin=origin):
+                status, headers, _ = self.request("POST", "/api/admin/session", "{}", {
+                    "Authorization": AUTH, "Content-Type": "application/json", "Origin": origin,
+                    "Sec-Fetch-Site": "same-origin"})
+                self.assertEqual(status, 200)
+                cookie = headers["Set-Cookie"].split(";", 1)[0]
+                self.assertEqual(self.request("POST", "/api/admin/logout", "{}", {
+                    "Cookie": cookie, "Content-Type": "application/json", "Origin": origin})[0], 200)
+
+    def test_custom_domain_near_misses_and_sibling_fetches_are_still_rejected(self):
+        service = self.persistent_auth()
+        self.app.environment["DIGEST_ADMIN_ORIGINS"] = "https://daily.example-news.ai"
+        cookie, _ = self.exchange_cookie()
+        with patch.object(service, "authenticate_session", wraps=service.authenticate_session) as authenticate:
+            for origin in ("https://daily.example-news.ai/", "http://daily.example-news.ai",
+                           "https://DAILY.example-news.ai", "https://daily.example-news.ai:443",
+                           "https://evil.daily.example-news.ai", "https://daily.example-news.ai.evil.example",
+                           "https://example-news.ai", "null"):
+                with self.subTest(origin=origin):
+                    self.assertEqual(self.request("POST", "/api/admin/logout", "", {
+                        "Cookie": cookie, "Content-Type": "application/json", "Origin": origin,
+                        "Host": "daily.example-news.ai"})[0], 403)
+            authenticate.assert_not_called()
+        self.assertEqual(self.request("POST", "/api/admin/logout", "", {
+            "Cookie": cookie, "Content-Type": "application/json", "Origin": "https://daily.example-news.ai",
+            "Sec-Fetch-Site": "same-site"})[0], 403)
+
+    def test_malformed_admin_origin_list_trusts_no_extra_origin_but_keeps_canonical_origin(self):
+        self.persistent_auth()
+        for value in ("https://daily.example-news.ai/", "https://daily.example-news.ai, *", "*",
+                      "https://user@daily.example-news.ai", "daily.example-news.ai",
+                      "https://daily.example-news.ai,", "https://daily.example-news.ai?x=1"):
+            with self.subTest(value=value):
+                self.app.environment["DIGEST_ADMIN_ORIGINS"] = value
+                self.assertEqual(self.request("POST", "/api/admin/session", "{}", {
+                    "Authorization": AUTH, "Content-Type": "application/json",
+                    "Origin": "https://daily.example-news.ai"})[0], 403)
+                self.assertEqual(self.request("POST", "/api/admin/session", "{}", {
+                    "Authorization": AUTH, "Content-Type": "application/json",
+                    "Origin": ENV["DIGEST_PUBLIC_BASE_URL"]})[0], 200)
+
+    def test_duplicate_origin_headers_are_rejected_even_when_each_is_trusted(self):
+        self.persistent_auth()
+        self.app.environment["DIGEST_ADMIN_ORIGINS"] = "https://daily.example-news.ai"
+        connection = http.client.HTTPConnection(*self.server.server_address, timeout=2)
+        try:
+            connection.putrequest("POST", "/api/admin/session")
+            for header, value in (("Authorization", AUTH), ("Content-Type", "application/json"),
+                                  ("Origin", "https://daily.example-news.ai"),
+                                  ("Origin", ENV["DIGEST_PUBLIC_BASE_URL"]), ("Content-Length", "2")):
+                connection.putheader(header, value)
+            connection.endheaders(b"{}")
+            self.assertEqual(connection.getresponse().status, 403)
+        finally:
+            connection.close()
 
     def test_expired_rotated_or_duplicate_cookie_is_rejected_without_fallback_to_recovery(self):
         self.persistent_auth()
@@ -1146,6 +1219,21 @@ class ArchiveAppTests(unittest.TestCase):
         self.request("POST", "/api/admin/publish", {}, auth=AUTH)
         self.assertEqual(archive.read_edition(self.store, "2026-11-26")["text"], "First public draft")
         self.assertEqual(self.store.values[space_app.PUBLIC_PATH]["text"], "A later published revision")
+
+
+class AdminOriginParsingTests(unittest.TestCase):
+    def test_parses_exact_lowercase_https_origins_and_fails_closed_otherwise(self):
+        parse = space_app.additional_admin_origins
+        self.assertEqual(parse("https://daily.example-news.ai"), ("https://daily.example-news.ai",))
+        self.assertEqual(parse(" https://a.example.org , https://b.example.org,https://a.example.org "),
+                         ("https://a.example.org", "https://b.example.org"))
+        for value in ("", "   ", None, 7, "https://A.example.org", "https://a.example.org/", "http://a.example.org",
+                      "https://a.example.org:8443", "https://u:p@a.example.org", "https://a.example.org#x",
+                      "https://-a.example.org", "https://a..example.org", "https://localhost",
+                      "https://a.example.org,", "https://a.example.org\nhttps://b.example.org", "x" * 1100,
+                      ",".join("https://h%d.example.org" % index for index in range(space_app.MAX_ADMIN_ORIGINS + 1))):
+            with self.subTest(value=value):
+                self.assertEqual(parse(value), ())
 
 
 class RecipientCapacityNoticeTests(unittest.TestCase):

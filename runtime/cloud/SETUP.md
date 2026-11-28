@@ -99,6 +99,8 @@ A successful email code or recovery credential creates a one-hour administrator 
 
 Open `/admin` directly in its own browser tab on the Space's own address. The session cookie is `SameSite=Strict`, so when the console is embedded in another page, such as the huggingface.co Space page, the browser does not keep the sign-in after a refresh. In that case the console shows a notice with a button to open it in a new tab. The cookie policy is intentionally not relaxed for embedding.
 
+To sign in to the admin on a custom domain attached to the Space (for example `https://daily.levyquant.ai`), add the Space variable `DIGEST_ADMIN_ORIGINS` with that exact origin: `https://`, lowercase host, no trailing slash or port; separate up to five origins with commas. The canonical `DIGEST_PUBLIC_BASE_URL` stays trusted, and any malformed entry trusts no extra origin. Sessions are per host, so signing in on one address does not sign in on the other. Emailed links keep using `DIGEST_PUBLIC_BASE_URL`.
+
 ### Shared Moomoo search keywords
 
 After deploying the version with source settings, change and save Moomoo keywords in the HF private admin at `/admin`. The setting is written to `settings/moomoo.json` on the existing `delivery-state` branch and encrypted with the original `STATE_ENCRYPTION_KEY`; neither HF's temporary disk nor browser storage keeps this persistent setting. The GitHub daily digest and newly generated HF previews read the same setting; `config/friend-sources.json` only supplies default keywords before anything has been saved.

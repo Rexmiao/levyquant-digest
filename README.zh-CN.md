@@ -99,6 +99,8 @@ CLI 将最近 50 次安全运行元数据写入现有加密状态的 `reports/de
 
 请在单独的浏览器标签页中直接打开 Space 自己地址下的 `/admin`。会话 Cookie 为 `SameSite=Strict`，后台嵌在其他页面（例如 huggingface.co 的 Space 页面）中时，浏览器刷新后不会保留登录状态；此时后台会显示提示和“在新标签页打开后台”的按钮。为保持安全性，不为嵌入场景放宽 Cookie 策略。
 
+如需在绑定到 Space 的自定义域名（例如 `https://daily.levyquant.ai`）上登录后台，请在 Space 变量中新增 `DIGEST_ADMIN_ORIGINS`，值为该地址的精确来源：以 `https://` 开头、主机名小写、不带结尾斜杠或端口；最多五个，用逗号分隔。规范地址 `DIGEST_PUBLIC_BASE_URL` 仍然受信任，任一条目格式错误时不信任任何额外来源。会话按地址分别保存，在一个地址登录不会同时登录另一个地址。邮件中的链接仍使用 `DIGEST_PUBLIC_BASE_URL`。
+
 ### 统一管理 Moomoo 检索关键词
 
 部署含来源设置功能的版本后，在 HF 私人后台 `/admin` 修改并保存 Moomoo 关键词。设置写入现有 `delivery-state` 分支的 `settings/moomoo.json`，通过原有 `STATE_ENCRYPTION_KEY` 加密；HF 临时磁盘和浏览器存储不保存这份持久设置。GitHub 每日日报与 HF 新生成的预览读取同一份设置，`config/friend-sources.json` 仅提供首次未保存设置时的默认关键词。

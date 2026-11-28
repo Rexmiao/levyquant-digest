@@ -39,6 +39,7 @@
       runLabel: 'Run #{id}',
       adminMissing: 'Configuration needed: {names}',
       adminConnected: 'Connected. Manage subscriptions, previews and delivery tasks here.',
+      adminOriginsInvalid: 'DIGEST_ADMIN_ORIGINS is set but not valid, so admin sign-in works only on the main address. Use exact https origins, lowercase, without a trailing slash or port.',
       subscribersUnavailable: 'Subscriber list temporarily unavailable',
       stateReadFailed: 'Subscription status could not be read. Please try again later.',
       previewReady: 'Your private preview is ready. Review it before publishing.',
@@ -91,6 +92,7 @@
       runLabel: '运行 #{id}',
       adminMissing: '待配置：{names}',
       adminConnected: '后台已连接，可管理订阅、预览和发送任务。',
+      adminOriginsInvalid: 'DIGEST_ADMIN_ORIGINS 已设置但格式无效，目前只能在主地址登录后台。请填写精确的 https 地址：全部小写，不带结尾斜杠或端口。',
       subscribersUnavailable: '订阅名单暂时无法读取',
       stateReadFailed: '订阅状态读取失败，请稍后重试。',
       previewReady: '私人预览已生成，审阅后即可发布到公开页面。',
@@ -1583,6 +1585,7 @@
     $('admin-status').textContent = Array.isArray(status.missing) && status.missing.length ?
       t('adminMissing', {names: status.missing.join(language === 'zh' ? '、' : ', ')}) : t('adminConnected');
     if (view.subscribersUnavailable) $('admin-status').textContent += ' ' + t('stateReadFailed');
+    if (status.admin_origins && status.admin_origins.invalid === true) $('admin-status').textContent += ' ' + t('adminOriginsInvalid');
   }
   function emptyMoomooSettings() {
     return {status: 'unavailable', revision: null, savedQueries: [], draft: ''};
