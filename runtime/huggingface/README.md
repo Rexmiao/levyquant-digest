@@ -59,7 +59,7 @@ Copy that output only into `SPACE_ADMIN_TOKEN` and save it privately. This comma
 | --- | --- |
 | `GEMINI_FREE_TIER_CONFIRMED` | `true` only after the owner verifies the key's Google project is still Free and has no paid billing enabled |
 | `SUBSCRIPTIONS_ENABLED` | Controls public subscription requests and confirmation mail; administrator sign-in codes are independent |
-| `DIGEST_PUBLIC_BASE_URL` | `https://<owner>-<space>.hf.space`, using the Space's actual direct application URL |
+| `DIGEST_PUBLIC_BASE_URL` | `https://<owner>-<space>.hf.space`, using the Space's actual direct application URL, or the approved custom domain `https://daily.levyquant.ai` (same value in GitHub Variables) |
 
 `GITHUB_REPOSITORY` defaults to the fixed personal repository `Rexmiao/levyquant-digest` and need not be supplied. A different explicit repository is rejected. GitHub Secrets and HF Secrets are separate stores; configuring one does not configure the other.
 

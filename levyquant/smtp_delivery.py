@@ -23,6 +23,16 @@ SMTP_HOST = "smtp.gmail.com"
 SMTP_PORT = 465
 SMTP_TIMEOUT_SECONDS = 45
 _CONTROL = re.compile(r"[\x00-\x1f\x7f]")
+# Hosts allowed in emailed confirm/unsubscribe links and DIGEST_PUBLIC_BASE_URL:
+# the Space's own *.hf.space host, or an exact custom domain attached to it.
+# Kept as an explicit allowlist because these links carry signed tokens.
+PUBLIC_CUSTOM_HOSTS = frozenset({"daily.levyquant.ai"})
+_HF_SPACE_HOST = re.compile(r"[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.hf\.space")
+
+
+def is_public_site_host(hostname: str) -> bool:
+    return isinstance(hostname, str) and (hostname in PUBLIC_CUSTOM_HOSTS
+                                          or _HF_SPACE_HOST.fullmatch(hostname) is not None)
 _ADDRESS = re.compile(r"[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?\Z")
 
 
@@ -147,7 +157,7 @@ def _one_click_url(value: str) -> str:
         parameters = parse_qs(parsed.query, keep_blank_values=True, strict_parsing=True)
         valid = (len(value) <= 500 and parsed.scheme == "https" and parsed.username is None and parsed.password is None
                  and parsed.port is None and parsed.netloc == parsed.hostname
-                 and re.fullmatch(r"[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.hf\.space", parsed.hostname or "")
+                 and is_public_site_host(parsed.hostname or "")
                  and parsed.path == "/one-click-unsubscribe" and not parsed.fragment
                  and set(parameters) == {"id", "token"}
                  and len(parameters["id"]) == len(parameters["token"]) == 1

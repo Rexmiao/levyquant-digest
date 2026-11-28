@@ -87,6 +87,9 @@ class SMTPDeliveryTests(unittest.TestCase):
         for url in (good.replace("https:", "http:"), good.replace("example-digest.hf.space", "outside.example"),
                     good.replace("example-digest.hf.space", "user:password@example-digest.hf.space"),
                     good.replace(".hf.space/", ".hf.space:443/"), good.replace("/one-click-unsubscribe", "/unsubscribe"),
+                    good.replace("example-digest.hf.space", "evil.daily.levyquant.ai"),
+                    good.replace("example-digest.hf.space", "daily.levyquant.ai.evil.example"),
+                    good.replace("example-digest.hf.space", "levyquant.ai"),
                     good + "#fragment", good + "&id=" + "c" * 24, good + "\r\nBcc: hidden@example.org",
                     good.replace("b" * 43, "%0d%0aheader")):
             with self.subTest(url=url), self.assertRaises(delivery.DeliveryError) as captured:

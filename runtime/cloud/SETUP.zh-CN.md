@@ -75,7 +75,7 @@ python -c "import base64,secrets; print(base64.urlsafe_b64encode(secrets.token_b
 
 可部署包与配置见 `runtime/huggingface/README.md`。HF 提供公开预览、邮箱确认订阅、退订和受服务端鉴权保护的 `/admin`；Gmail SMTP 和纽约 07:00 的日程继续由 GitHub 执行。
 
-准备好实际 Space 地址后，在本仓库 Variables 新增 `DIGEST_PUBLIC_BASE_URL=https://<owner>-<space>.hf.space`。确认 HF 与本仓库使用相同状态密钥和公开地址、且确认邮件工作流已部署，再将两端的 `SUBSCRIPTIONS_ENABLED` 设置为 `true`。这个开关控制公开注册和订阅确认邮件，已有退订及后台停用记录仍须在每日发送时过滤。
+准备好实际 Space 地址后，在本仓库 Variables 新增 `DIGEST_PUBLIC_BASE_URL=https://<owner>-<space>.hf.space`。也可以填已批准的自定义域名 `https://daily.levyquant.ai`，这是代码唯一接受的非 hf.space 地址（见 `levyquant/smtp_delivery.py` 中的 `PUBLIC_CUSTOM_HOSTS`）；此后邮件中的确认和退订链接都使用该地址。本仓库与 Space 变量必须填同一个值，并保持 hf.space 地址可用，以便已发出的链接继续有效。确认 HF 与本仓库使用相同状态密钥和公开地址、且确认邮件工作流已部署，再将两端的 `SUBSCRIPTIONS_ENABLED` 设置为 `true`。这个开关控制公开注册和订阅确认邮件，已有退订及后台停用记录仍须在每日发送时过滤。
 
 启用后，普通名单与已确认的公开订阅合并，退订的外部地址被排除，固定内部名单始终保留。公开注册只先排队确认邮件；点击邮件里的确认按钮后才加入公开订阅。确认邮件在 GitHub 上执行，另有每小时队列恢复。单次提交成功不等于实际收到邮件。
 

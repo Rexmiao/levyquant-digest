@@ -14,9 +14,10 @@ from unittest.mock import Mock, patch
 from urllib.parse import parse_qs, urlsplit
 
 from levyquant import subscription_mail
-from levyquant.smtp_delivery import DeliveryError, DeliveryUncertain
+from levyquant.smtp_delivery import DeliveryError, DeliveryUncertain, prepare_message
 from levyquant.state_store import LocalStateStore, StateConflict, StateError
-from levyquant.subscriptions import REGISTRY_PATH, REPOSITORY, SubscriptionError, SubscriptionService, service_from_env, validate_email
+from levyquant.subscriptions import (REGISTRY_PATH, REPOSITORY, SubscriptionError, SubscriptionService, service_from_env,
+                                     validate_email, validate_public_base_url)
 
 
 KEY = base64.urlsafe_b64encode(b"s" * 32).decode()
@@ -262,6 +263,22 @@ class SubscriptionTests(unittest.TestCase):
             with self.assertRaises(StateConflict):
                 self.service.request_signup("other@example.org")
         self.assertEqual(saved.call_count, 3)
+
+    def test_approved_custom_domain_is_the_only_non_hf_space_base_url_and_signs_links_on_it(self):
+        self.assertEqual(validate_public_base_url("https://daily.levyquant.ai"), "https://daily.levyquant.ai")
+        self.assertEqual(validate_public_base_url("https://daily.levyquant.ai/"), "https://daily.levyquant.ai")
+        for base in ("http://daily.levyquant.ai", "https://evil.daily.levyquant.ai", "https://daily.levyquant.ai.evil.example",
+                     "https://levyquant.ai", "https://daily.levyquant.ai:443", "https://daily.levyquant.ai/path",
+                     "https://user@daily.levyquant.ai", "https://daily.levyquant.ai?x=1"):
+            with self.subTest(base=base), self.assertRaises(SubscriptionError):
+                validate_public_base_url(base)
+        service = SubscriptionService(self.store, KEY, "https://daily.levyquant.ai", now=lambda: self.now)
+        service.delivery_recipients(["reader@example.org"], ["internal@example.org"])
+        for url in (service.unsubscribe_url("reader@example.org"), service.one_click_unsubscribe_url("reader@example.org")):
+            self.assertTrue(url.startswith("https://daily.levyquant.ai/"), url)
+        # The one-click URL passes the strict SMTP header check on the custom domain too.
+        prepare_message("Subject", "<p>x</p>", "x", "sender@example.com", "reader@example.org", "edition-1",
+                        unsubscribe_url=service.one_click_unsubscribe_url("reader@example.org"))
 
     def test_invalid_email_base_url_repository_and_corrupt_state_fail_closed(self):
         for email in ("Name <reader@example.org>", "reader@example.org\r\nBcc: x@example.org", ".reader@example.org", "a..b@example.org", "reader@-example.org", "reader@example.org,second@example.org"):

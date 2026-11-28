@@ -11,6 +11,7 @@ import re
 import secrets
 from urllib.parse import urlencode, urlsplit
 
+from .smtp_delivery import is_public_site_host
 from .state_store import GitHubStateStore, StateConflict, StateError
 
 
@@ -47,17 +48,17 @@ def validate_email(value: str) -> str:
 
 def validate_public_base_url(value: str) -> str:
     if not isinstance(value, str) or any(char.isspace() or ord(char) < 32 for char in value):
-        raise SubscriptionError("A canonical HTTPS hf.space URL is required")
+        raise SubscriptionError("A canonical HTTPS hf.space or approved custom-domain URL is required")
     try:
         parsed = urlsplit(value)
         hostname = parsed.hostname or ""
         valid = (parsed.scheme == "https" and parsed.username is None and parsed.password is None
                  and parsed.port is None and parsed.path in ("", "/") and not parsed.query and not parsed.fragment
-                 and re.fullmatch(r"[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.hf\.space", hostname))
+                 and is_public_site_host(hostname))
     except ValueError:
         valid = False
     if not valid:
-        raise SubscriptionError("A canonical HTTPS hf.space URL is required")
+        raise SubscriptionError("A canonical HTTPS hf.space or approved custom-domain URL is required")
     return "https://" + hostname
 
 
