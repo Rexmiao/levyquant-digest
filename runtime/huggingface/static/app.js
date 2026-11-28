@@ -1881,9 +1881,9 @@
   for (const button of document.querySelectorAll('[data-language]')) {
     button.addEventListener('click', () => setLanguage(button.getAttribute('data-language'), true));
   }
-  const darkQuery = typeof window.matchMedia === 'function' ? window.matchMedia('(prefers-color-scheme: dark)') : null;
+  // Day is the default for every visitor; Night applies only after the reader chooses it.
   function effectiveTheme() {
-    return document.documentElement.getAttribute('data-theme') || (darkQuery && darkQuery.matches ? 'dark' : 'light');
+    return document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'light';
   }
   function paintThemeButtons() {
     const current = effectiveTheme();
@@ -1899,11 +1899,6 @@
   }
   for (const button of document.querySelectorAll('[data-theme-choice]')) {
     button.addEventListener('click', () => setTheme(button.getAttribute('data-theme-choice')));
-  }
-  if (darkQuery) {
-    // Without a saved choice the page follows the system; keep the pressed state in step.
-    if (typeof darkQuery.addEventListener === 'function') darkQuery.addEventListener('change', paintThemeButtons);
-    else if (typeof darkQuery.addListener === 'function') darkQuery.addListener(paintThemeButtons);
   }
   paintThemeButtons();
   setLanguage(preferredLanguage());

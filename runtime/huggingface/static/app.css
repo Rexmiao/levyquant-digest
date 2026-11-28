@@ -24,12 +24,6 @@ html[lang="zh-CN"] #edition-heading{font-size:clamp(24px,2.8vw,30px)}html[lang="
 }
 html[lang="zh-CN"]{--serif:Georgia,'Songti SC','Noto Serif CJK SC','Source Han Serif SC','SimSun',serif;--serif-text:Georgia,'Songti SC','Noto Serif CJK SC','SimSun',serif;
   --sans:system-ui,-apple-system,'Segoe UI','PingFang SC','Microsoft YaHei','Noto Sans CJK SC',sans-serif}
-@media (prefers-color-scheme:dark){
-  html:not([data-theme="light"]) :is(body[data-page="public"],body[data-page="archive"]){
-    --bg:#0f1412;--paper:#161d1a;--ink:#ebe7dd;--muted:#a0aaa3;--line:#2c3631;--line-strong:#d8d2c4;
-    --green:#8ccbb0;--green-ink:#acdcc6;--on-green:#0f1412;--brass:#d6ad6d;--tint:#1d2622;--field:#121815;--field-line:#3a4640;
-    --shadow:0 1px 0 rgba(0,0,0,.3),0 24px 48px -30px rgba(0,0,0,.7);color-scheme:dark}
-}
 body[data-page="public"],body[data-page="archive"]{background:var(--bg);color:var(--ink);font-family:var(--sans);font-size:16px;line-height:1.6;-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility}
 body[data-page="public"] ::selection,body[data-page="archive"] ::selection{background:var(--green);color:var(--on-green)}
 :is([data-page="public"],[data-page="archive"]) a:focus-visible,:is([data-page="public"],[data-page="archive"]) button:focus-visible,:is([data-page="public"],[data-page="archive"]) input:focus,:is([data-page="public"],[data-page="archive"]) select:focus,:is([data-page="public"],[data-page="archive"]) summary:focus-visible{outline:2px solid var(--green);outline-offset:3px}
@@ -83,7 +77,6 @@ body[data-page="public"] ::selection,body[data-page="archive"] ::selection{backg
 .text-link.strong:hover{text-decoration:underline}
 .form-status{font-size:14px;line-height:1.6}
 .form-status.error{color:#b4432f}
-@media (prefers-color-scheme:dark){html:not([data-theme="light"]) :is([data-page="public"],[data-page="archive"]) .form-status.error{color:#f0957f}}
 html[data-theme="dark"] :is([data-page="public"],[data-page="archive"]) .form-status.error{color:#f0957f}
 
 /* Hero */
@@ -258,14 +251,7 @@ html[lang="zh-CN"] #edition-heading,html[lang="zh-CN"] .signup-card h2{letter-sp
   --action:#121212;--action-hover:#333333;--on-action:#ffffff;
   --shadow:0 1px 0 rgba(18,18,18,.05),0 22px 44px -32px rgba(18,18,18,.35);
 }
-@media (prefers-color-scheme:dark){
-  html:not([data-theme="light"]) :is(body[data-page="public"],body[data-page="archive"]){
-    --bg:#0e0e0e;--paper:#171717;--ink:#ececec;--muted:#a3a7ab;--line:#2d2d2d;--line-strong:#e6e6e6;
-    --green:#7fb0ff;--green-ink:#a9c8ff;--on-green:#0e0e0e;--brass:#f0a54a;--tint:#222222;--field:#121212;--field-line:#3c3c3c;
-    --action:#ececec;--action-hover:#ffffff;--on-action:#0e0e0e;
-    --shadow:0 1px 0 rgba(0,0,0,.4),0 22px 44px -30px rgba(0,0,0,.8);color-scheme:dark}
-}
-/* Reader-chosen Night mode: the same dark palette regardless of the system setting. */
+/* Night mode applies only when the reader chooses it; Day is the default for everyone. */
 html[data-theme="dark"] :is(body[data-page="public"],body[data-page="archive"]){
   --bg:#0e0e0e;--paper:#171717;--ink:#ececec;--muted:#a3a7ab;--line:#2d2d2d;--line-strong:#e6e6e6;
   --green:#7fb0ff;--green-ink:#a9c8ff;--on-green:#0e0e0e;--brass:#f0a54a;--tint:#222222;--field:#121212;--field-line:#3c3c3c;
@@ -284,7 +270,6 @@ html[data-theme="light"] :is(body[data-page="public"],body[data-page="archive"])
 /* Root color scheme follows the page theme so the viewport scrollbar matches (public/archive only). */
 html[data-theme="dark"]:has(body:is([data-page="public"],[data-page="archive"])){color-scheme:dark}
 html[data-theme="light"]:has(body:is([data-page="public"],[data-page="archive"])){color-scheme:light}
-@media (prefers-color-scheme:dark){html:not([data-theme="light"]):has(body:is([data-page="public"],[data-page="archive"])){color-scheme:dark}}
 /* Small phones: keep the full date by giving the controls their own row. */
 @media(max-width:480px){
   .topbar-inner{flex-wrap:wrap;row-gap:6px;padding-block:6px}
