@@ -3,7 +3,8 @@
 The caller supplies a password obtained from its environment secret store. This
 module never reads n8n credentials, environment variables, or subscriber files.
 An accepted SMTP response means the relay accepted the message, not that it has
-arrived in an inbox. No operation automatically retries a message.
+arrived in an inbox. No operation retries a message once its data may have been
+handed over; SMTPSession only reopens a dropped, reused connection before DATA.
 """
 
 from __future__ import annotations
@@ -194,6 +195,148 @@ def _envelope(message: EmailMessage, username: str) -> tuple[str, str, str, byte
     return sender, recipient, message_id, message.as_bytes(policy=wire_policy)
 
 
+def _validated_password(password) -> str:
+    if not isinstance(password, str) or not password.strip() or _CONTROL.search(password):
+        raise DeliveryError("A non-empty SMTP application password is required.", stage="validation")
+    return password
+
+
+def _open_client():
+    return smtplib.SMTP_SSL(
+        SMTP_HOST,
+        SMTP_PORT,
+        context=ssl.create_default_context(),
+        timeout=SMTP_TIMEOUT_SECONDS,
+    )
+
+
+class _StaleConnection(Exception):
+    """A reused connection dropped before any message data was handed over."""
+
+
+class SMTPSession:
+    """Reuse one verified TLS login for several single-recipient submissions.
+
+    Every message is still its own MAIL/RCPT/DATA transaction with one
+    recipient. The connection is closed after any failure, and replaced after
+    MAX_MESSAGES_PER_CONNECTION accepted messages, so no broken or long-lived
+    transaction state carries over to the next recipient.
+
+    A reused connection that drops before DATA starts (for example an idle
+    timeout on the relay) is reopened once for that message: nothing was handed
+    over, so this cannot duplicate a submission. Any failure during or after
+    DATA is never retried and keeps the DeliveryUncertain contract.
+    """
+
+    MAX_MESSAGES_PER_CONNECTION = 20
+
+    def __init__(self, username: str, password: str) -> None:
+        self.username = _address(username, "SMTP username")
+        self._password = _validated_password(password)
+        self._client = None
+        self._sent_on_connection = 0
+        self.connections_opened = 0
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc_info):
+        self.close()
+        return False
+
+    def close(self) -> None:
+        client, self._client, self._sent_on_connection = self._client, None, 0
+        if client is not None:
+            try:
+                # Do not let a failed QUIT turn an acknowledged delivery into an
+                # apparent failure. Closing requires no additional SMTP exchange.
+                client.close()
+            except Exception:
+                pass
+
+    def send(self, message: EmailMessage, *, username: str | None = None, password: str | None = None) -> dict:
+        """Same contract as send_one; username/password, if given, must match the session."""
+        if username is not None and _address(username, "SMTP username") != self.username:
+            raise DeliveryError("SMTP username must match the session account.", stage="validation")
+        if password is not None and _validated_password(password) != self._password:
+            raise DeliveryError("SMTP password must match the session account.", stage="validation")
+        sender, recipient, message_id, wire = _envelope(message, self.username)
+        try:
+            return self._transact(sender, recipient, message_id, wire)
+        except _StaleConnection:
+            self.close()
+            return self._transact(sender, recipient, message_id, wire, allow_stale_retry=False)
+
+    def _transact(self, sender, recipient, message_id, wire, *, allow_stale_retry=True) -> dict:
+        stage = "connect"
+        reused = False
+        try:
+            if self._client is not None and self._sent_on_connection >= self.MAX_MESSAGES_PER_CONNECTION:
+                self.close()
+            if self._client is None:
+                self._client = _open_client()
+                self.connections_opened += 1
+                stage = "greeting"
+                self._client.ehlo_or_helo_if_needed()
+                stage = "auth"
+                self._client.login(self.username, self._password)
+            else:
+                reused = True
+            client = self._client
+            stage = "mail"
+            code, _ = client.mail(sender)
+            if code != 250:
+                raise DeliveryError(
+                    "SMTP rejected the envelope sender.", stage=stage, smtp_code=code,
+                    recipient=recipient, message_id=message_id,
+                )
+            stage = "recipient"
+            code, _ = client.rcpt(recipient)
+            if code not in (250, 251):
+                raise DeliveryError(
+                    "SMTP rejected the recipient.", stage=stage, smtp_code=code,
+                    recipient=recipient, message_id=message_id,
+                )
+            stage = "data"
+            code, _ = client.data(wire)
+            if code == 250:
+                self._sent_on_connection += 1
+                return {"status": "accepted", "recipient": recipient, "message_id": message_id, "smtp_code": 250}
+            if 400 <= code <= 599:
+                raise DeliveryError(
+                    "SMTP rejected the message data.", stage=stage, smtp_code=code,
+                    recipient=recipient, message_id=message_id,
+                )
+            raise DeliveryUncertain(
+                "SMTP returned an unexpected DATA acknowledgement; do not retry without checking delivery.",
+                stage=stage, smtp_code=code, recipient=recipient, message_id=message_id,
+            )
+        except DeliveryError:
+            self.close()
+            raise
+        except smtplib.SMTPResponseException as exc:
+            self.close()
+            # A 4xx/5xx response is an explicit refusal, including a DATA rejection.
+            # Never expose the raw provider response: it may contain a credential.
+            error = DeliveryUncertain if stage == "data" and not 400 <= exc.smtp_code <= 599 else DeliveryError
+            raise error(
+                "SMTP explicitly refused the request." if error is DeliveryError else
+                "SMTP DATA outcome is uncertain; do not retry without checking delivery.",
+                stage=stage, smtp_code=exc.smtp_code, recipient=recipient, message_id=message_id,
+            ) from None
+        except Exception as exc:
+            self.close()
+            if (allow_stale_retry and reused and stage in ("mail", "recipient")
+                    and isinstance(exc, (smtplib.SMTPServerDisconnected, ConnectionError, TimeoutError))):
+                raise _StaleConnection() from None
+            error = DeliveryUncertain if stage == "data" else DeliveryError
+            raise error(
+                "SMTP connection failed before message data was submitted." if error is DeliveryError else
+                "SMTP connection failed during DATA; delivery may have succeeded. Do not retry without checking.",
+                stage=stage, recipient=recipient, message_id=message_id,
+            ) from None
+
+
 def send_one(message: EmailMessage, *, username: str, password: str) -> dict:
     """Submit one prepared email over verified TLS to smtp.gmail.com:465.
 
@@ -202,74 +345,7 @@ def send_one(message: EmailMessage, *, username: str, password: str) -> dict:
     DeliveryError. A transport/protocol failure during DATA raises
     DeliveryUncertain, since the final acknowledgement may have been lost.
     Caller-supplied password is normally os.environ['GMAIL_APP_PASSWORD'].
+    This opens and closes its own connection and never retries.
     """
-    username = _address(username, "SMTP username")
-    if not isinstance(password, str) or not password.strip() or _CONTROL.search(password):
-        raise DeliveryError("A non-empty SMTP application password is required.", stage="validation")
-    sender, recipient, message_id, wire = _envelope(message, username)
-    client = None
-    stage = "connect"
-    try:
-        client = smtplib.SMTP_SSL(
-            SMTP_HOST,
-            SMTP_PORT,
-            context=ssl.create_default_context(),
-            timeout=SMTP_TIMEOUT_SECONDS,
-        )
-        stage = "greeting"
-        client.ehlo_or_helo_if_needed()
-        stage = "auth"
-        client.login(username, password)
-        stage = "mail"
-        code, _ = client.mail(sender)
-        if code != 250:
-            raise DeliveryError(
-                "SMTP rejected the envelope sender.", stage=stage, smtp_code=code,
-                recipient=recipient, message_id=message_id,
-            )
-        stage = "recipient"
-        code, _ = client.rcpt(recipient)
-        if code not in (250, 251):
-            raise DeliveryError(
-                "SMTP rejected the recipient.", stage=stage, smtp_code=code,
-                recipient=recipient, message_id=message_id,
-            )
-        stage = "data"
-        code, _ = client.data(wire)
-        if code == 250:
-            return {"status": "accepted", "recipient": recipient, "message_id": message_id, "smtp_code": 250}
-        if 400 <= code <= 599:
-            raise DeliveryError(
-                "SMTP rejected the message data.", stage=stage, smtp_code=code,
-                recipient=recipient, message_id=message_id,
-            )
-        raise DeliveryUncertain(
-            "SMTP returned an unexpected DATA acknowledgement; do not retry without checking delivery.",
-            stage=stage, smtp_code=code, recipient=recipient, message_id=message_id,
-        )
-    except DeliveryError:
-        raise
-    except smtplib.SMTPResponseException as exc:
-        # A 4xx/5xx response is an explicit refusal, including a DATA rejection.
-        # Never expose the raw provider response: it may contain a credential.
-        error = DeliveryUncertain if stage == "data" and not 400 <= exc.smtp_code <= 599 else DeliveryError
-        raise error(
-            "SMTP explicitly refused the request." if error is DeliveryError else
-            "SMTP DATA outcome is uncertain; do not retry without checking delivery.",
-            stage=stage, smtp_code=exc.smtp_code, recipient=recipient, message_id=message_id,
-        ) from None
-    except Exception:
-        error = DeliveryUncertain if stage == "data" else DeliveryError
-        raise error(
-            "SMTP connection failed before message data was submitted." if error is DeliveryError else
-            "SMTP connection failed during DATA; delivery may have succeeded. Do not retry without checking.",
-            stage=stage, recipient=recipient, message_id=message_id,
-        ) from None
-    finally:
-        if client is not None:
-            try:
-                # Do not let a failed QUIT turn an acknowledged delivery into an
-                # apparent failure. Closing requires no additional SMTP exchange.
-                client.close()
-            except Exception:
-                pass
+    with SMTPSession(username, password) as session:
+        return session.send(message)

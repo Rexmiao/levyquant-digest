@@ -235,5 +235,105 @@ class SMTPDeliveryTests(unittest.TestCase):
         self.client.data.assert_called_once()
 
 
+class SMTPSessionTests(unittest.TestCase):
+    def setUp(self):
+        self.sender = "sender@example.com"
+        self.password = "test-only-secret-that-must-not-leak"
+        self.clients = []
+        def connect(*args, **kwargs):
+            client = Mock()
+            client.mail.return_value = (250, b"Sender accepted")
+            client.rcpt.return_value = (250, b"Recipient accepted")
+            client.data.return_value = (250, b"Message accepted")
+            self.clients.append(client)
+            return client
+        self.smtp_patch = patch.object(delivery.smtplib, "SMTP_SSL", side_effect=connect)
+        self.smtp = self.smtp_patch.start()
+        self.addCleanup(self.smtp_patch.stop)
+
+    def message(self, recipient):
+        return delivery.prepare_message("LevyQuant Morning Briefing", "<p>Body</p>", "Body",
+                                        self.sender, recipient, "2026-11-28-morning")
+
+    def test_one_login_is_reused_for_several_single_recipient_transactions(self):
+        recipients = ["a@example.org", "b@example.org", "c@example.org"]
+        with delivery.SMTPSession(self.sender, self.password) as session:
+            results = [session.send(self.message(address)) for address in recipients]
+        self.assertEqual([result["status"] for result in results], ["accepted"] * 3)
+        self.assertEqual(self.smtp.call_count, 1)
+        client = self.clients[0]
+        client.login.assert_called_once_with(self.sender, self.password)
+        self.assertEqual([call.args[0] for call in client.rcpt.call_args_list], recipients)
+        self.assertEqual(client.data.call_count, 3)
+        client.close.assert_called_once()
+
+    def test_connection_is_replaced_after_the_per_connection_limit(self):
+        with patch.object(delivery.SMTPSession, "MAX_MESSAGES_PER_CONNECTION", 2):
+            with delivery.SMTPSession(self.sender, self.password) as session:
+                for index in range(5):
+                    session.send(self.message("r%d@example.org" % index))
+        self.assertEqual(self.smtp.call_count, 3)
+        self.assertEqual([client.data.call_count for client in self.clients], [2, 2, 1])
+
+    def test_any_failure_closes_the_connection_and_the_next_message_reconnects(self):
+        session = delivery.SMTPSession(self.sender, self.password)
+        self.assertEqual(session.send(self.message("a@example.org"))["status"], "accepted")
+        self.clients[0].rcpt.return_value = (550, b"No such recipient")
+        with self.assertRaises(delivery.DeliveryError) as caught:
+            session.send(self.message("missing@example.org"))
+        self.assertEqual(caught.exception.stage, "recipient")
+        self.clients[0].close.assert_called_once()
+        self.assertEqual(session.send(self.message("b@example.org"))["status"], "accepted")
+        self.assertEqual(self.smtp.call_count, 2)
+        session.close()
+
+    def test_reused_connection_dropped_before_data_reconnects_once_without_duplicate(self):
+        session = delivery.SMTPSession(self.sender, self.password)
+        session.send(self.message("a@example.org"))
+        self.clients[0].mail.side_effect = smtplib.SMTPServerDisconnected("idle timeout")
+        result = session.send(self.message("b@example.org"))
+        self.assertEqual(result["status"], "accepted")
+        self.assertEqual(self.smtp.call_count, 2)
+        self.assertEqual(self.clients[0].data.call_count, 1)
+        self.assertEqual(self.clients[1].data.call_count, 1)
+        session.close()
+
+    def test_second_drop_before_data_is_a_known_retry_safe_failure(self):
+        session = delivery.SMTPSession(self.sender, self.password)
+        session.send(self.message("a@example.org"))
+        self.clients[0].rcpt.side_effect = smtplib.SMTPServerDisconnected("idle timeout")
+        original = self.smtp.side_effect
+        def connect_broken(*args, **kwargs):
+            client = original(*args, **kwargs)
+            client.mail.side_effect = smtplib.SMTPServerDisconnected("dropped again")
+            return client
+        self.smtp.side_effect = connect_broken
+        with self.assertRaises(delivery.DeliveryError) as caught:
+            session.send(self.message("b@example.org"))
+        self.assertNotIsInstance(caught.exception, delivery.DeliveryUncertain)
+        self.assertTrue(caught.exception.retry_safe)
+        self.assertEqual(self.smtp.call_count, 2)
+        self.assertEqual(sum(client.data.call_count for client in self.clients), 1)
+
+    def test_data_failure_on_a_reused_connection_is_uncertain_and_never_retried(self):
+        session = delivery.SMTPSession(self.sender, self.password)
+        session.send(self.message("a@example.org"))
+        self.clients[0].data.side_effect = smtplib.SMTPServerDisconnected(self.password)
+        with self.assertRaises(delivery.DeliveryUncertain) as caught:
+            session.send(self.message("b@example.org"))
+        self.assertEqual(caught.exception.stage, "data")
+        self.assertNotIn(self.password, str(caught.exception))
+        self.assertEqual(self.smtp.call_count, 1)
+        self.assertEqual(self.clients[0].data.call_count, 2)
+
+    def test_session_rejects_a_different_account_before_connecting(self):
+        session = delivery.SMTPSession(self.sender, self.password)
+        with self.assertRaisesRegex(delivery.DeliveryError, "must match"):
+            session.send(self.message("a@example.org"), username="other@example.org")
+        with self.assertRaisesRegex(delivery.DeliveryError, "must match"):
+            session.send(self.message("a@example.org"), password="a-different-secret")
+        self.smtp.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -17,7 +17,7 @@ from .editor import EditorError, editor_to_digest, generate_editor, translate_di
 from .delivery_reports import COUNT_FIELDS, ERROR_TYPES, RESULT_CODES, SUMMARY_FIELDS, record_run_report, summarize_edition
 from .feeds import DIAGNOSTIC_STATUSES, collect_sources
 from .render import RECIPIENT_FOOTER_SLOT, _safe_url, render_bilingual_digest, render_digest
-from .smtp_delivery import DeliveryError, DeliveryUncertain, prepare_message, send_one
+from .smtp_delivery import DeliveryError, DeliveryUncertain, SMTPSession, prepare_message, send_one
 from .archive import publish_edition
 from .sources import enrich_articles
 from .source_settings import (
@@ -29,6 +29,9 @@ from .subscriptions import REPOSITORY, SubscriptionService, validate_public_base
 
 ROOT = Path(__file__).resolve().parent.parent
 FREE_MODEL = "gemini-3.5-flash-lite"
+# Recipients reserved per durable state write. Every reservation is durable
+# before its SMTP attempt; results are written once per batch.
+DELIVERY_BATCH_SIZE = 10
 
 
 class ConfigurationError(RuntimeError):
@@ -296,14 +299,18 @@ def claim_run_date(store, environment: dict, date: str, now: datetime) -> None:
 def deliver_edition(store, path: str, edition: dict, recipients: list[str], *, sender: str,
                     password: str, execution_id: str, transport=None, subscription_service=None,
                     internal_recipients: list[str] | None = None) -> dict:
-    """Reserve, recheck opt-outs, then submit once; preserve ambiguous outcomes."""
+    """Reserve, recheck opt-outs, then submit once; preserve ambiguous outcomes.
+
+    Recipients are handled in batches of DELIVERY_BATCH_SIZE: one write reserves
+    the batch before any SMTP attempt, and one write records its results. With
+    no transport given, one SMTPSession login is reused for the whole run.
+    """
     if edition.get("mode") != "live" or edition.get("validated") is not True:
         raise ConfigurationError("Only a validated live edition may be delivered")
     current_date = datetime.now(timezone.utc).astimezone(ZoneInfo("America/New_York")).date().isoformat()
     validate_frozen_edition(edition, current_date)
     if path != "editions/" + current_date + ".json":
         raise ConfigurationError("Delivery state path does not match the current edition")
-    transport = transport or send_one
     version = edition.get("copy_version", 1)
     if type(version) is not int or version not in (1, 2):
         raise ConfigurationError("Stored edition copy version is unsupported")
@@ -343,27 +350,29 @@ def deliver_edition(store, path: str, edition: dict, recipients: list[str], *, s
         return result
 
     def skip(key):
+        # Recorded in memory; written with the next batch persist.
         delivery[key] = {"status": "skipped_unsubscribed", "reason": "subscription_not_allowed",
                          "execution_id": execution_id, "skipped_at": datetime.now(timezone.utc).isoformat()}
-        persist()
 
-    persist()
-    for address in recipients:
+    def check_date():
         if datetime.now(timezone.utc).astimezone(ZoneInfo("America/New_York")).date().isoformat() != current_date:
             raise ConfigurationError("The New York edition date changed during delivery; further submissions are blocked")
-        key = recipient_key(address)
-        previous = delivery.get(key, {})
-        if previous.get("status") == "accepted":
-            continue
-        if previous.get("status") == "skipped_unsubscribed" and address.casefold() not in internal_keys:
-            continue
-        if previous.get("status") in ("reserved", "uncertain"):
-            continue
-        if not allowed(address):
-            skip(key)
-            continue
-        if previous.get("status") == "rejected" and previous.get("retry_safe") is not True:
-            continue
+
+    def restore(key, previous):
+        # Only for recipients never handed to the transport in this run.
+        if previous:
+            delivery[key] = previous
+        else:
+            delivery.pop(key, None)
+
+    def persist_best_effort():
+        try:
+            persist()
+        except Exception:
+            pass
+
+    def personalized(address):
+        """Return the recipient's message, or None when the recipient is blocked."""
         message = messages[address]
         if version == 2:
             if address.casefold() in internal_keys:
@@ -373,8 +382,7 @@ def deliver_edition(store, path: str, edition: dict, recipients: list[str], *, s
             else:
                 kind = subscription_service.delivery_recipient_kind(address, internal)
             if kind == "blocked":
-                skip(key)
-                continue
+                return None
             reasons = {"internal": "Operator archive copy",
                        "confirmed": "This briefing is sent because you confirmed a LevyQuant subscription.",
                        "authorized": "This briefing is sent to an address on LevyQuant’s authorized mailing list."}
@@ -404,30 +412,98 @@ def deliver_edition(store, path: str, edition: dict, recipients: list[str], *, s
             text_body += "\n\nManage or unsubscribe from the mailing list:\n" + url + "\n"
             message = prepare_message(edition["subject"], html_body, text_body, sender, address,
                                       edition["edition_id"], unsubscribe_url=one_click)
-        reservation = {"status": "reserved", "execution_id": execution_id,
-                       "message_id": message["Message-ID"],
-                       "reserved_at": datetime.now(timezone.utc).isoformat()}
-        delivery[key] = reservation
-        persist()  # A failed acknowledgement stops before SMTP.
-        if not allowed(address):
-            skip(key)
-            continue
-        try:
-            receipt = transport(message, username=sender, password=password)
-        except DeliveryUncertain as error:
-            reservation.update({"status": "uncertain", "stage": error.stage, "smtp_code": error.smtp_code})
+        return message
+
+    session = []
+
+    def session_transport(message, *, username, password):
+        # One verified login reused across this run; created lazily so a bad
+        # credential is recorded per recipient exactly like send_one.
+        if not session:
+            session.append(SMTPSession(username, password))
+        return session[0].send(message)
+
+    if transport is None:
+        transport = session_transport
+
+    persist()
+    try:
+        for start in range(0, len(recipients), DELIVERY_BATCH_SIZE):
+            batch = recipients[start:start + DELIVERY_BATCH_SIZE]
+            reserved = []  # (address, key, message, reservation, previous)
+            changed = False
+            # Phase 1: eligibility and message checks; reserve in memory only.
+            try:
+                for address in batch:
+                    check_date()
+                    key = recipient_key(address)
+                    previous = delivery.get(key, {})
+                    if previous.get("status") == "accepted":
+                        continue
+                    if previous.get("status") == "skipped_unsubscribed" and address.casefold() not in internal_keys:
+                        continue
+                    if previous.get("status") in ("reserved", "uncertain"):
+                        continue
+                    if not allowed(address):
+                        skip(key); changed = True
+                        continue
+                    if previous.get("status") == "rejected" and previous.get("retry_safe") is not True:
+                        continue
+                    message = personalized(address)
+                    if message is None:
+                        skip(key); changed = True
+                        continue
+                    reservation = {"status": "reserved", "execution_id": execution_id,
+                                   "message_id": message["Message-ID"],
+                                   "reserved_at": datetime.now(timezone.utc).isoformat()}
+                    delivery[key] = reservation
+                    reserved.append((address, key, message, reservation, previous))
+            except BaseException:
+                for _, key, _, _, previous in reserved:
+                    restore(key, previous)
+                if changed:
+                    persist_best_effort()
+                raise
+            if not reserved:
+                if changed:
+                    persist()
+                continue
+            # One durable write reserves the whole batch. A failed acknowledgement
+            # raises here, before any SMTP attempt for this batch.
             persist()
-        except DeliveryError as error:
-            reservation.update({"status": "rejected", "retry_safe": error.retry_safe is True,
-                                "stage": error.stage, "smtp_code": error.smtp_code})
+            # Phase 2: recheck each reserved recipient, then submit once.
+            for index, (address, key, message, reservation, previous) in enumerate(reserved):
+                try:
+                    check_date()
+                    if not allowed(address):
+                        skip(key)
+                        continue
+                    receipt = transport(message, username=sender, password=password)
+                except DeliveryUncertain as error:
+                    reservation.update({"status": "uncertain", "stage": error.stage, "smtp_code": error.smtp_code})
+                except DeliveryError as error:
+                    reservation.update({"status": "rejected", "retry_safe": error.retry_safe is True,
+                                        "stage": error.stage, "smtp_code": error.smtp_code})
+                except BaseException:
+                    # The current recipient keeps its reservation and is never
+                    # replayed. Later recipients in this batch were never reached,
+                    # so their reservations are released for a future run.
+                    for _, later_key, _, _, later_previous in reserved[index + 1:]:
+                        restore(later_key, later_previous)
+                    persist_best_effort()
+                    raise
+                else:
+                    if not isinstance(receipt, dict) or receipt.get("status") != "accepted":
+                        reservation["status"] = "uncertain"
+                    else:
+                        reservation.update({"status": "accepted", "accepted_at": datetime.now(timezone.utc).isoformat(),
+                                            "smtp_code": receipt.get("smtp_code")})
+            # One durable write records the batch results. If it is lost, every
+            # submitted recipient stays reserved and is never replayed.
             persist()
-        else:
-            if not isinstance(receipt, dict) or receipt.get("status") != "accepted":
-                reservation["status"] = "uncertain"
-            else:
-                reservation.update({"status": "accepted", "accepted_at": datetime.now(timezone.utc).isoformat(),
-                                    "smtp_code": receipt.get("smtp_code")})
-            persist()
+    finally:
+        if session:
+            session[0].close()
     persist()
     summary = edition["delivery_summary"]
     return {**summary, "blocked_or_failed": sum(summary[key] for key in ("rejected", "uncertain", "reserved", "pending"))}

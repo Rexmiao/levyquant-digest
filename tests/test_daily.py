@@ -311,6 +311,84 @@ class BusinessTests(unittest.TestCase):
                          (original["subject"], original["html"], original["text"], original["content_sha256"]))
         self.assertNotIn("copy_version", frozen)
 
+    def deliver_many(self, recipients, transport, **kwargs):
+        return daily.deliver_edition(self.store, PATH, kwargs.pop("value", None) or self.store.load(PATH), recipients,
+            sender="sender@example.com", password="offline-password", execution_id="batch", transport=transport, **kwargs)
+
+    def test_batches_cut_state_writes_but_keep_each_reservation_durable_before_smtp(self):
+        recipients = ["reader%02d@example.org" % index for index in range(25)]
+        seen_reserved = []
+        def transport(message, **kwargs):
+            persisted = LocalStateStore(self.store.root).load(PATH)
+            key = daily.recipient_key(str(message["To"]))
+            seen_reserved.append(persisted["deliveries"][key]["status"] == "reserved")
+            return {"status": "accepted", "smtp_code": 250}
+        original = self.store.save
+        writes = []
+        with patch.object(self.store, "save", side_effect=lambda path, value: (writes.append(path), original(path, value))):
+            result = self.deliver_many(recipients, transport)
+        self.assertEqual(result["accepted"], 25)
+        self.assertTrue(all(seen_reserved) and len(seen_reserved) == 25)
+        # initial + (reserve + results) for 3 batches + final; previously 2 writes per recipient.
+        self.assertLessEqual(len(writes), 2 + 2 * -(-25 // daily.DELIVERY_BATCH_SIZE))
+
+    def test_later_batch_is_not_reserved_while_an_earlier_batch_is_sending(self):
+        recipients = ["reader%02d@example.org" % index for index in range(daily.DELIVERY_BATCH_SIZE + 2)]
+        later = daily.recipient_key(recipients[-1])
+        def transport(message, **kwargs):
+            if str(message["To"]) == recipients[0]:
+                persisted = LocalStateStore(self.store.root).load(PATH)
+                self.assertNotIn(later, persisted["deliveries"])
+            return {"status": "accepted"}
+        self.assertEqual(self.deliver_many(recipients, transport)["accepted"], len(recipients))
+
+    def test_crash_mid_batch_keeps_current_reserved_and_releases_unreached_recipients(self):
+        recipients = ["first@example.org", "crash@example.org", "unreached@example.org"]
+        def transport(message, **kwargs):
+            if str(message["To"]) == "crash@example.org":
+                raise RuntimeError("unexpected transport crash")
+            return {"status": "accepted"}
+        with self.assertRaises(RuntimeError):
+            self.deliver_many(recipients, transport)
+        persisted = self.store.load(PATH)["deliveries"]
+        self.assertEqual(persisted[daily.recipient_key("first@example.org")]["status"], "accepted")
+        self.assertEqual(persisted[daily.recipient_key("crash@example.org")]["status"], "reserved")
+        self.assertNotIn(daily.recipient_key("unreached@example.org"), persisted)
+        rerun = Mock(return_value={"status": "accepted"})
+        result = self.deliver_many(recipients, rerun)
+        self.assertEqual([str(call.args[0]["To"]) for call in rerun.call_args_list], ["unreached@example.org"])
+        self.assertEqual((result["accepted"], result["reserved"]), (2, 1))
+
+    def test_eligibility_failure_before_reservation_reserves_nothing_in_that_batch(self):
+        recipients = ["one@example.org", "two@example.org"]
+        service, transport = Mock(), Mock()
+        service.is_delivery_allowed.side_effect = [True, StateError("Offline eligibility failure")]
+        query = "?id=" + "a" * 24 + "&token=" + "b" * 43
+        service.unsubscribe_url.return_value = "https://example-digest.hf.space/unsubscribe" + query
+        service.one_click_unsubscribe_url.return_value = "https://example-digest.hf.space/one-click-unsubscribe" + query
+        with self.assertRaises(StateError):
+            self.deliver_many(recipients, transport, subscription_service=service,
+                              internal_recipients=["internal@example.org"])
+        transport.assert_not_called()
+        self.assertFalse(self.store.load(PATH).get("deliveries"))
+
+    def test_default_transport_reuses_one_session_and_closes_it(self):
+        recipients = ["reader%02d@example.org" % index for index in range(4)]
+        session = Mock()
+        session.send.return_value = {"status": "accepted", "smtp_code": 250}
+        with patch("levyquant.daily.SMTPSession", return_value=session) as factory:
+            result = self.deliver_many(recipients, None)
+        self.assertEqual(result["accepted"], 4)
+        factory.assert_called_once_with("sender@example.com", "offline-password")
+        self.assertEqual(session.send.call_count, 4)
+        session.close.assert_called_once()
+
+    def test_bad_credential_from_lazy_session_is_recorded_per_recipient_not_raised(self):
+        with patch("levyquant.daily.SMTPSession",
+                   side_effect=DeliveryError("A non-empty SMTP application password is required.", stage="validation")):
+            result = self.deliver_many(["one@example.org"], None)
+        self.assertEqual((result["rejected"], result["accepted"]), (1, 0))
+
     def test_v2_authorization_kind_read_failure_stops_before_transport(self):
         value = deepcopy(self.value)
         value.update(copy_version=2, html='<table><tr data-digest-block="footer"><td>' + RECIPIENT_FOOTER_SLOT + '</td></tr></table>')
@@ -362,6 +440,9 @@ class InputAndPipelineTests(unittest.TestCase):
         self.enrich = patch("levyquant.daily.enrich_articles", side_effect=lambda articles, **kwargs: (articles, [])).start()
         self.generate = patch("levyquant.daily.generate_editor", return_value=self.editor).start()
         self.smtp = patch("levyquant.daily.send_one", return_value={"status": "accepted"}).start()
+        # Formal sends reuse one SMTPSession; route its sends to the same offline mock.
+        self.smtp_session = patch("levyquant.daily.SMTPSession",
+                                  side_effect=lambda *args, **kwargs: Mock(send=self.smtp)).start()
         self.factory = patch("levyquant.daily.GitHubStateStore", side_effect=lambda *args, **kwargs: TestStore(self.root / "remote")).start()
 
     def enable_moomoo_source(self):
