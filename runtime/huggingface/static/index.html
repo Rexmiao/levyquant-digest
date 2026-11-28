@@ -52,11 +52,10 @@
           <label for="email" data-i18n="emailLabel">Your email address</label>
           <input id="email" name="email" type="email" autocomplete="email" maxlength="254" placeholder="you@example.com" data-i18n-placeholder="emailPlaceholder" required>
           <div class="honeypot" aria-hidden="true"><label for="website" data-i18n="websiteLabel">Website</label><input id="website" name="website" tabindex="-1" autocomplete="off"></div>
-          <label class="check-row"><input id="consent" type="checkbox" required><span data-i18n="signupConsent">Email me the morning briefing. I can unsubscribe at any time.</span></label>
           <button id="signup-button" class="button primary" type="submit" disabled>Subscriptions opening soon <span aria-hidden="true">→</span></button>
           <p id="signup-status" class="form-status" role="status" aria-live="polite"></p>
         </form>
-        <p class="small muted" data-i18n="signupConfirmationNote">Confirm your email to join. Every issue includes an unsubscribe link.</p>
+        <p class="small muted signup-note" data-i18n="signupConfirmationNote">By subscribing, you agree to receive the morning briefing by email. Confirm your email to join; you can unsubscribe at any time from any issue.</p>
         <details class="privacy"><summary data-i18n="privacyTitle">How your email is used</summary><p data-i18n="privacyCopy">We use your address to send the briefing and subscription confirmation messages. Your address and the subscriber list are not displayed publicly. You can leave using the link in any issue.</p></details>
       </aside>
     </section>

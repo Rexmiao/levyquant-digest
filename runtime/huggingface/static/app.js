@@ -138,8 +138,7 @@
   "emailLabel": "Your email address",
   "emailPlaceholder": "you@example.com",
   "websiteLabel": "Website",
-  "signupConsent": "Email me the morning briefing. I can unsubscribe at any time.",
-  "signupConfirmationNote": "Confirm your email to join. Every issue includes an unsubscribe link.",
+  "signupConfirmationNote": "By subscribing, you agree to receive the morning briefing by email. Confirm your email to join; you can unsubscribe at any time from any issue.",
   "privacyTitle": "How your email is used",
   "privacyCopy": "We use your address to send the briefing and subscription confirmation messages. Your address and the subscriber list are not displayed publicly. You can leave using the link in any issue.",
   "insideBriefingLabel": "Inside the briefing",
@@ -215,8 +214,7 @@
   "emailLabel": "你的邮箱地址",
   "emailPlaceholder": "you@example.com",
   "websiteLabel": "网站",
-  "signupConsent": "我希望收到每日晨间简报，并可随时退订。",
-  "signupConfirmationNote": "确认邮箱后完成订阅。每期简报都附有退订链接。",
+  "signupConfirmationNote": "订阅即表示你同意通过邮件接收每日晨间简报。确认邮箱后完成订阅，可随时通过任一期简报中的链接退订。",
   "privacyTitle": "我们如何使用你的邮箱",
   "privacyCopy": "你的邮箱仅用于发送简报及订阅确认邮件，邮箱和订阅名单不会公开。可通过任一期简报中的链接退订。",
   "insideBriefingLabel": "简报内容",
@@ -321,7 +319,9 @@
     adminSessionRestoreUnavailable: 'Your saved sign-in could not be checked. Reload to try again, or sign in below.',
     adminSignOutUnavailable: 'Sign-out could not be confirmed. Please try signing out again before leaving this browser.',
     adminSignedOut: 'You have signed out.',
-    adminRecoverySummary: 'Use a recovery credential'
+    adminRecoverySummary: 'Use a recovery credential',
+    adminFramedNotice: 'This console is embedded in another page, where your browser will not keep the sign-in after a refresh. Open it in its own tab to stay signed in.',
+    adminFramedOpen: 'Open the console in a new tab'
   });
   Object.assign(TEXT.zh, {
     adminEmailLoginCopy: '使用邮箱验证码登录。登录状态最长保留一小时，刷新页面无需重新验证；退出后会清除会话。',
@@ -342,7 +342,9 @@
     adminSessionRestoreUnavailable: '暂时无法检查已有登录状态。请刷新重试，或在下方重新登录。',
     adminSignOutUnavailable: '暂时无法确认已退出。离开当前浏览器前，请再次尝试退出登录。',
     adminSignedOut: '已退出登录。',
-    adminRecoverySummary: '使用恢复凭证'
+    adminRecoverySummary: '使用恢复凭证',
+    adminFramedNotice: '当前后台嵌在其他页面中，浏览器在这种情况下刷新后不会保留登录状态。请在单独的标签页中打开后台，即可保持登录。',
+    adminFramedOpen: '在新标签页打开后台'
   });
   Object.assign(TEXT.en, {
     deliveryEyebrow: 'FORMAL DAILY EDITIONS', deliveryTitle: 'Last 7 days: actual delivery records',
@@ -1752,6 +1754,12 @@
         if (!error.stale) showError('action-status', error);
       } finally { $('send-button').disabled = false; }
     });
+    let framed = false;
+    try { framed = window.self !== window.top; } catch (error) { framed = true; }
+    if (framed && $('admin-framed-notice')) {
+      $('admin-framed-link').href = location.origin + '/admin';
+      $('admin-framed-notice').hidden = false;
+    }
     restoreAdminSession();
   }
   for (const button of document.querySelectorAll('[data-language]')) {

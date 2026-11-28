@@ -245,3 +245,35 @@ html[lang="zh-CN"] #edition-heading,html[lang="zh-CN"] .signup-card h2{letter-sp
 .front-columns{grid-template-columns:repeat(auto-fit,minmax(min(100%,280px),1fr))}
 .check-row,.check-row span{font-weight:400}
 @media(max-width:960px){.front-columns{grid-template-columns:repeat(auto-fit,minmax(min(100%,280px),1fr))}.highlight-section,.highlight-section:nth-child(odd),.highlight-section:nth-child(even){padding:22px 0 4px;border-left:0}}
+
+/* ==========================================================================
+   Financial-press palette (2026-11-27): newsprint, black ink, one blue accent,
+   amber data markers. Primary actions are solid ink, section titles uppercase.
+   ========================================================================== */
+:root{
+  --bg:#f6f3eb;--paper:#fffdf8;--ink:#121212;--muted:#555a5f;--line:#d8d3c6;--line-strong:#121212;
+  --green:#1b4f9c;--green-ink:#123a75;--on-green:#ffffff;--brass:#d9822b;--tint:#ebe7dc;--field:#ffffff;--field-line:#c7c1b2;
+  --action:#121212;--action-hover:#333333;--on-action:#ffffff;
+  --shadow:0 1px 0 rgba(18,18,18,.05),0 22px 44px -32px rgba(18,18,18,.35);
+}
+@media (prefers-color-scheme:dark){
+  body[data-page="public"],body[data-page="archive"]{
+    --bg:#0e0e0e;--paper:#171717;--ink:#ececec;--muted:#a3a7ab;--line:#2d2d2d;--line-strong:#e6e6e6;
+    --green:#7fb0ff;--green-ink:#a9c8ff;--on-green:#0e0e0e;--brass:#f0a54a;--tint:#222222;--field:#121212;--field-line:#3c3c3c;
+    --action:#ececec;--action-hover:#ffffff;--on-action:#0e0e0e;
+    --shadow:0 1px 0 rgba(0,0,0,.4),0 22px 44px -30px rgba(0,0,0,.8)}
+}
+.button.primary,.button:disabled,.button:disabled:hover{background:var(--action);color:var(--on-action)}
+.button.primary:hover{background:var(--action-hover)}
+.button.secondary:disabled,.button.secondary:disabled:hover{background:transparent;color:var(--ink)}
+.signup-card,.flow-card{border-top-color:var(--line-strong)}
+.live-dot{background:var(--brass)}
+@keyframes lq-pulse{0%{box-shadow:0 0 0 0 color-mix(in srgb,var(--brass) 55%,transparent)}70%,100%{box-shadow:0 0 0 7px transparent}}
+.lead-kicker span{background:var(--ink);color:var(--bg)}
+.masthead-nav .nav-cta{color:var(--green)}
+body[data-page="public"] ::selection,body[data-page="archive"] ::selection{background:var(--ink);color:var(--bg)}
+.signup-note{margin:14px 0 0}
+.inside-grid h3{font:700 19px/1.25 var(--sans);letter-spacing:.06em;text-transform:uppercase}
+html[lang="zh-CN"] .inside-grid h3{letter-spacing:.04em}
+.signup-card #signup-button{margin-top:16px}
+.framed-notice{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:12px 20px;margin-bottom:22px;border-left:4px solid var(--brass,#d9822b)}.framed-notice p{margin:0;max-width:60ch;font-size:14px;line-height:1.6}.framed-notice .button{flex-shrink:0}
