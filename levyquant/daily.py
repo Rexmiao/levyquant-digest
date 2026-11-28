@@ -81,7 +81,7 @@ def _briefing_subject(date: str) -> str:
             raise ValueError
     except (ValueError, TypeError):
         raise ConfigurationError("A valid briefing date is required") from None
-    return f"LévyQuant Morning Briefing — {months[moment.month - 1]} {moment.day}, {moment.year}"
+    return f"Lévy Quant Morning Briefing — {months[moment.month - 1]} {moment.day}, {moment.year}"
 
 
 def validate_config(config: dict) -> None:
@@ -398,8 +398,8 @@ def deliver_edition(store, path: str, edition: dict, recipients: list[str], *, s
             if kind == "blocked":
                 return None
             reasons = {"internal": "Operator archive copy",
-                       "confirmed": "This briefing is sent because you confirmed a LévyQuant subscription.",
-                       "authorized": "This briefing is sent to an address on LévyQuant’s authorized mailing list."}
+                       "confirmed": "This briefing is sent because you confirmed a Lévy Quant subscription.",
+                       "authorized": "This briefing is sent to an address on Lévy Quant’s authorized mailing list."}
             if not isinstance(kind, str) or kind not in reasons:
                 raise StateError("The recipient authorization source could not be verified")
             reason = reasons[kind]
@@ -410,8 +410,8 @@ def deliver_edition(store, path: str, edition: dict, recipients: list[str], *, s
                 if not _safe_url(url):
                     raise StateError("The recipient unsubscribe link could not be verified")
                 one_click = subscription_service.one_click_unsubscribe_url(address)
-                personal += '<p style="margin:0;"><a href="' + escape(url, quote=True) + '">Unsubscribe from LévyQuant</a></p>'
-                text_footer += "Unsubscribe from LévyQuant:\n" + url + "\n"
+                personal += '<p style="margin:0;"><a href="' + escape(url, quote=True) + '">Unsubscribe from Lévy Quant</a></p>'
+                text_footer += "Unsubscribe from Lévy Quant:\n" + url + "\n"
             personal += '</div>'
             message = prepare_message(edition["subject"], edition["html"].replace(RECIPIENT_FOOTER_SLOT, personal),
                 edition["text"].rstrip() + text_footer, sender, address, edition["edition_id"], unsubscribe_url=one_click)
@@ -591,9 +591,9 @@ def run(config: dict, mode: str, environment: dict, output: Path, *, moomoo_sett
     output.mkdir(parents=True, exist_ok=True)
     mail = mail_settings(environment, config) if mode in ("send", "smtp-test", "preview-email") else None
     if mode == "smtp-test":
-        message = prepare_message("[TEST] LévyQuant cloud SMTP connection",
-            "<p>LévyQuant cloud SMTP connection test. This is not a daily news digest.</p>",
-            "LévyQuant cloud SMTP connection test. This is not a daily news digest.",
+        message = prepare_message("[TEST] Lévy Quant cloud SMTP connection",
+            "<p>Lévy Quant cloud SMTP connection test. This is not a daily news digest.</p>",
+            "Lévy Quant cloud SMTP connection test. This is not a daily news digest.",
             mail.from_address, mail.operator_address, "smtp-test-" + environment.get("GITHUB_RUN_ID", now.isoformat()))
         receipt = _send_test(message, mail)
         return {"mode": mode, "status": receipt["status"], "test_to_sender_only": True, "transport": mail.transport}
@@ -822,7 +822,7 @@ def main(argv: list[str] | None = None) -> int:
             except Exception:
                 pass
     (args.output / "run-summary.json").write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
-    lines = ["# LévyQuant daily digest", "", *[f"- {key}: {value}" for key, value in result.items()]]
+    lines = ["# Lévy Quant daily digest", "", *[f"- {key}: {value}" for key, value in result.items()]]
     (args.output / "run-summary.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
     print(json.dumps(result, ensure_ascii=False))
     return 1 if result["status"] in ("failed", "delivery_needs_attention") else 0

@@ -22,7 +22,7 @@
       msgOperationFailed: 'The request could not be completed. Please try again.',
       flowTitleConfirm: 'Confirm your email.',
       flowTitleUnsubscribe: 'Leave the list.',
-      flowDescriptionConfirm: 'One last step: confirm that you want to receive the LévyQuant morning briefing.',
+      flowDescriptionConfirm: 'One last step: confirm that you want to receive the Lévy Quant morning briefing.',
       flowDescriptionUnsubscribe: 'Click below to stop receiving the briefing at this address.',
       flowButtonConfirm: 'Confirm subscription',
       flowButtonUnsubscribe: 'Unsubscribe',
@@ -39,7 +39,7 @@
       signupOpen: 'Get the morning briefing →',
       signupClosed: 'Subscriptions opening soon',
       signupSubmitting: 'Submitting…',
-      signupCheckEmail: 'Check your inbox and Spam/Junk folder for the LévyQuant confirmation email. Open the email link and select "Confirm subscription" on the page to finish. If you are already subscribed, no action is needed.',
+      signupCheckEmail: 'Check your inbox and Spam/Junk folder for the Lévy Quant confirmation email. Open the email link and select "Confirm subscription" on the page to finish. If you are already subscribed, no action is needed.',
       signupFailed: 'We could not accept this request. Please check your address or try again later.',
       subscriberCount: '{count} confirmed',
       noSubscriptions: 'No public subscription records yet.',
@@ -75,7 +75,7 @@
       msgOperationFailed: '操作未完成，请稍后重试。',
       flowTitleConfirm: '确认你的邮箱。',
       flowTitleUnsubscribe: '取消订阅。',
-      flowDescriptionConfirm: '最后一步：确认你希望收到 LévyQuant 每日晨间简报。',
+      flowDescriptionConfirm: '最后一步：确认你希望收到 Lévy Quant 每日晨间简报。',
       flowDescriptionUnsubscribe: '点击下方按钮，停止向这个邮箱发送简报。',
       flowButtonConfirm: '确认订阅',
       flowButtonUnsubscribe: '取消订阅',
@@ -92,7 +92,7 @@
       signupOpen: '订阅每日晨间简报 →',
       signupClosed: '订阅即将开放',
       signupSubmitting: '正在提交…',
-      signupCheckEmail: '请检查收件箱及 Spam/Junk（垃圾邮件）文件夹，找到 LévyQuant 订阅确认邮件。打开邮件中的链接，并在页面点击“确认订阅”完成确认。已订阅的邮箱无需重复操作。',
+      signupCheckEmail: '请检查收件箱及 Spam/Junk（垃圾邮件）文件夹，找到 Lévy Quant 订阅确认邮件。打开邮件中的链接，并在页面点击“确认订阅”完成确认。已订阅的邮箱无需重复操作。',
       signupFailed: '暂时无法提交，请检查邮箱地址或稍后重试。',
       subscriberCount: '{count} 位已确认',
       noSubscriptions: '尚无公开订阅记录。',
@@ -122,8 +122,8 @@
   };
   Object.assign(TEXT.en, {
   "publicDescription": "A daily briefing on macro, U.S. equities and quantitative research.",
-  "publicPageTitle": "LévyQuant — The morning briefing",
-  "brandHomeLabel": "LévyQuant home",
+  "publicPageTitle": "Lévy Quant — The morning briefing",
+  "brandHomeLabel": "Lévy Quant home",
   "homeSubscribeLink": "Home & Subscribe",
   "languageSwitcher": "Interface language",
   "switchToChinese": "Switch to Chinese",
@@ -141,11 +141,11 @@
   "latestEditionEyebrow": "THE LATEST EDITION",
   "contentLanguageNotice": "Edition language: English.",
   "contentBilingualNotice": "English edition followed by Simplified Chinese.",
-  "previewPaperLabel": "LÉVYQUANT / MORNING EDITION",
+  "previewPaperLabel": "LÉVY QUANT / MORNING EDITION",
   "previewMacro": "Macro & policy",
   "previewEquities": "U.S. companies & sectors",
   "previewResearch": "Quantitative research",
-  "publicPreviewTitle": "Latest LévyQuant briefing",
+  "publicPreviewTitle": "Latest Lévy Quant briefing",
   "signupEyebrow": "A BETTER MORNING ROUTINE",
   "signupTitleLine1": "Stay informed.",
   "signupTitleLine2": "Keep your inbox useful.",
@@ -168,7 +168,7 @@
   "footerHabit": "A daily reading habit.",
   "footerContext": "Public sources. Original links. Clear context.",
   "footerAdminLogin": "Admin",
-  "adminPageTitle": "LévyQuant — Private console",
+  "adminPageTitle": "Lévy Quant — Private console",
   "adminNavLabel": "Private console",
   "adminLoginEyebrow": "OWNER ACCESS",
   "adminLoginTitle": "Manage your briefing.",
@@ -196,13 +196,13 @@
   "adminDraftEyebrow": "PRIVATE DRAFT",
   "adminDraftTitle": "Preview awaiting publication",
   "adminDraftCopy": "Visitors can see this draft only after you choose Publish to public page.",
-  "privatePreviewTitle": "Private LévyQuant preview",
+  "privatePreviewTitle": "Private Lévy Quant preview",
   "adminPublicLink": "Open the public briefing"
 });
   Object.assign(TEXT.zh, {
   "publicDescription": "每日汇总宏观、美股与量化研究的重点动态。",
-  "publicPageTitle": "LévyQuant｜宏观、美股与量化研究",
-  "brandHomeLabel": "LévyQuant 首页",
+  "publicPageTitle": "Lévy Quant｜宏观、美股与量化研究",
+  "brandHomeLabel": "Lévy Quant 首页",
   "homeSubscribeLink": "首页与订阅",
   "languageSwitcher": "界面语言",
   "switchToChinese": "切换到中文",
@@ -220,11 +220,11 @@
   "latestEditionEyebrow": "最新一期",
   "contentLanguageNotice": "本期正文：英文。",
   "contentBilingualNotice": "本期正文先英文，后简体中文。",
-  "previewPaperLabel": "LÉVYQUANT / 晨间简报",
+  "previewPaperLabel": "LÉVY QUANT / 晨间简报",
   "previewMacro": "宏观与政策",
   "previewEquities": "美股公司与行业",
   "previewResearch": "量化研究",
-  "publicPreviewTitle": "最新 LévyQuant 简报",
+  "publicPreviewTitle": "最新 Lévy Quant 简报",
   "signupEyebrow": "让早晨更有收获",
   "signupTitleLine1": "掌握重要动态。",
   "signupTitleLine2": "让每封邮件都有价值。",
@@ -247,7 +247,7 @@
   "footerHabit": "每天，读懂重要动态。",
   "footerContext": "公开来源 · 原文链接 · 清晰背景",
   "footerAdminLogin": "管理员登录",
-  "adminPageTitle": "LévyQuant｜私人管理后台",
+  "adminPageTitle": "Lévy Quant｜私人管理后台",
   "adminNavLabel": "私人管理后台",
   "adminLoginEyebrow": "管理员入口",
   "adminLoginTitle": "管理你的简报。",
@@ -437,10 +437,10 @@
     deliveryWorkflowStale: '流程结果已过期', deliveryWorkflowStartupFailed: '流程未能启动'
   });
   Object.assign(TEXT.en, {
-    archiveLink: 'Archive', archivePageTitle: 'LévyQuant — Published editions',
-    archiveDescription: 'Browse published LévyQuant briefings by month and search the full text of a selected month.',
+    archiveLink: 'Archive', archivePageTitle: 'Lévy Quant — Published editions',
+    archiveDescription: 'Browse published Lévy Quant briefings by month and search the full text of a selected month.',
     archiveEyebrow: 'THE PUBLIC ARCHIVE', archiveHeading: 'Published editions',
-    archiveCopy: 'Browse published LévyQuant briefings by month, or search the full text of a selected month.',
+    archiveCopy: 'Browse published Lévy Quant briefings by month, or search the full text of a selected month.',
     archiveVersionNote: 'Each date keeps its first published edition.',
     archiveFiltersLabel: 'Find a published edition', archiveMonthLabel: 'Month',
     archiveQueryLabel: "Search this month's full text", archiveQueryPlaceholder: 'Company, topic or keyword',
@@ -449,7 +449,7 @@
     archiveResultsEyebrow: 'PUBLISHED EDITIONS', archiveResultsHeading: 'Browse the archive',
     archivePagesLabel: 'Archive result pages', archivePrevious: 'Previous', archiveNext: 'Next',
     archiveReaderEyebrow: 'PUBLISHED BRIEFING', archiveShareLink: 'Link to this edition',
-    archivePreviewTitle: 'Published LévyQuant briefing', archiveLoadingMonths: 'Loading published months…',
+    archivePreviewTitle: 'Published Lévy Quant briefing', archiveLoadingMonths: 'Loading published months…',
     archiveIndexUnavailable: 'The archive index is temporarily unavailable. Reload it to try again.',
     archiveEmpty: 'No published editions are available yet.', archiveNoMonths: 'No published months',
     archiveMonthsUnavailable: 'Months unavailable', archiveLoadingResults: 'Searching the selected month…',
@@ -464,10 +464,10 @@
     archiveDateInvalid: 'Choose a valid calendar date.', archiveNoExcerpt: 'Open this edition to read the full briefing.'
   });
   Object.assign(TEXT.zh, {
-    archiveLink: '往期简报', archivePageTitle: 'LévyQuant｜往期简报',
-    archiveDescription: '按月浏览已公开的 LévyQuant 简报，并搜索所选月份的全文。',
+    archiveLink: '往期简报', archivePageTitle: 'Lévy Quant｜往期简报',
+    archiveDescription: '按月浏览已公开的 Lévy Quant 简报，并搜索所选月份的全文。',
     archiveEyebrow: '公开简报归档', archiveHeading: '已公开的简报',
-    archiveCopy: '浏览已公开的 LévyQuant 晨间简报，按月查看，也可搜索所选月份的全文。',
+    archiveCopy: '浏览已公开的 Lévy Quant 晨间简报，按月查看，也可搜索所选月份的全文。',
     archiveVersionNote: '每个日期保留首次公开版本。',
     archiveFiltersLabel: '查找已公开的简报', archiveMonthLabel: '月份',
     archiveQueryLabel: '搜索该月简报全文', archiveQueryPlaceholder: '公司、主题或关键词',
@@ -476,7 +476,7 @@
     archiveResultsEyebrow: '已公开的简报', archiveResultsHeading: '浏览往期简报',
     archivePagesLabel: '归档结果分页', archivePrevious: '上一页', archiveNext: '下一页',
     archiveReaderEyebrow: '公开简报全文', archiveShareLink: '本期分享链接',
-    archivePreviewTitle: 'LévyQuant 公开简报全文', archiveLoadingMonths: '正在加载归档月份…',
+    archivePreviewTitle: 'Lévy Quant 公开简报全文', archiveLoadingMonths: '正在加载归档月份…',
     archiveIndexUnavailable: '暂时无法读取归档月份，请重新加载后重试。',
     archiveEmpty: '目前还没有已公开的简报。', archiveNoMonths: '暂无归档月份',
     archiveMonthsUnavailable: '月份暂不可用', archiveLoadingResults: '正在搜索所选月份…',
@@ -826,7 +826,7 @@
       const footer = Array.from(parent.children).find(row => row.tagName === 'TR' &&
         (row.matches('[data-digest-block="footer"]') || Array.from(row.children).some(cell =>
           cell.tagName === 'TD' && (cell.matches('[data-digest-block="footer"]') ||
-            (cell.textContent.trim().startsWith('LevyQuant Daily ·') || cell.textContent.trim().startsWith('LévyQuant Daily ·'))))));
+            (cell.textContent.trim().startsWith('LevyQuant Daily ·') || cell.textContent.trim().startsWith('LévyQuant Daily ·') || cell.textContent.trim().startsWith('Lévy Quant Daily ·'))))));
       if (footer && footer !== coverage && footer.parentElement === parent) {
         if (coverage.nextElementSibling !== footer) parent.insertBefore(coverage, footer);
         for (const node of [coverage, ...Array.from(coverage.children).filter(cell => cell.tagName === 'TD')]) {

@@ -140,7 +140,7 @@ def _render_digest_body(digest: dict, articles: list[dict]) -> tuple[list[str], 
     """Render trusted markup from escaped fields, excluding document and footer."""
     language = _digest_language(digest)
     labels = _LABELS[language]
-    title = _text(digest.get("title")) or "LévyQuant Daily"
+    title = _text(digest.get("title")) or "Lévy Quant Daily"
     edition = _text(digest.get("edition"))
     date = _text(digest.get("date"))
     cutoff = format_new_york_time(digest.get("cutoff")) or labels["not_provided"]
@@ -268,7 +268,7 @@ def _render_digest_body(digest: dict, articles: list[dict]) -> tuple[list[str], 
 def _render_document(body: str, text_parts: list[str], *, title: str, language: str,
                      linked_ids: set[str], personalize: bool) -> tuple[str, str]:
     labels = _LABELS[language]
-    footer = f'LévyQuant · Macro, U.S. equities and quantitative research · {labels["source_count"]}: {len(linked_ids)}'
+    footer = f'Lévy Quant · Macro, U.S. equities and quantitative research · {labels["source_count"]}: {len(linked_ids)}'
     recipient_slot = RECIPIENT_FOOTER_SLOT if personalize else ""
     footer_html = (
         '<tr data-digest-block="footer"><td style="padding:16px 0 0;border-top:1px solid #dadce0;'
@@ -283,7 +283,7 @@ def render_digest(digest: dict, articles: list[dict]) -> tuple[str, str]:
     """Return complete HTML and plain text without sending or writing files."""
     html_parts, text_parts, linked_ids = _render_digest_body(digest, articles)
     return _render_document("".join(html_parts), text_parts,
-                            title=_text(digest.get("title")) or "LévyQuant Daily",
+                            title=_text(digest.get("title")) or "Lévy Quant Daily",
                             language=_digest_language(digest), linked_ids=linked_ids,
                             personalize=digest.get("footer_personalization") is True)
 
@@ -318,7 +318,7 @@ def render_bilingual_digest(english: dict, chinese: dict, articles: list[dict]) 
         text_parts.extend([heading, "", *lines])
         linked_ids.update(cited)
     return _render_document("".join(bodies), text_parts,
-                            title=_text(english.get("title")) or "LévyQuant Daily",
+                            title=_text(english.get("title")) or "Lévy Quant Daily",
                             language="en", linked_ids=linked_ids,
                             personalize=any(digest.get("footer_personalization") is True
                                             for digest in (english, chinese)))

@@ -365,7 +365,7 @@ class ConfirmationWorkerTests(unittest.TestCase):
         self.assertEqual(result["accepted"], 1)
         self.assertEqual(len(messages), 1)
         message = messages[0]
-        self.assertEqual(str(message["Subject"]), "Confirm your LévyQuant subscription")
+        self.assertEqual(str(message["Subject"]), "Confirm your Lévy Quant subscription")
         plain = message.get_body(preferencelist=("plain",)).get_content()
         html = message.get_body(preferencelist=("html",)).get_content()
 
@@ -387,14 +387,14 @@ class ConfirmationWorkerTests(unittest.TestCase):
         parsed.feed(html)
         visible_html = " ".join(parsed.text)
         for sentence in (
-            "This email address was entered on the LévyQuant subscription page.",
-            "LévyQuant sends a morning briefing on macroeconomics, U.S. equities and quantitative research, around 7 a.m. New York time.",
+            "This email address was entered on the Lévy Quant subscription page.",
+            "Lévy Quant sends a morning briefing on macroeconomics, U.S. equities and quantitative research, around 7 a.m. New York time.",
             "To subscribe, open the page below and select Confirm.",
             "Review and confirm subscription",
             "This link expires 48 hours after the request.",
             "If you did not request this, ignore this email.",
             "No subscription will start unless you confirm.",
-            "LévyQuant · sender&briefing@example.org",
+            "Lévy Quant · sender&briefing@example.org",
         ):
             with self.subTest(sentence=sentence):
                 self.assertIn(sentence, plain)

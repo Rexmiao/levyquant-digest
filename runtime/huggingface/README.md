@@ -1,5 +1,5 @@
 ---
-title: LévyQuant Digest
+title: Lévy Quant Digest
 emoji: 📈
 colorFrom: blue
 colorTo: indigo
@@ -9,7 +9,7 @@ pinned: false
 short_description: Macro, U.S. equities and quantitative research
 ---
 
-# LévyQuant Digest
+# Lévy Quant Digest
 
 Public news preview, confirmed email subscriptions, unsubscribe controls, and a private owner administration page. The digest focuses on macroeconomics, U.S. equities, and quantitative research. Each newly generated briefing presents English followed by Simplified Chinese.
 
@@ -135,7 +135,7 @@ The default `config/friend-sources.json` has 20 feeds plus Moomoo's official New
 
 The package does not create a Space, purchase resources, configure secrets, or send an email. Complete and verify these deployment steps before describing the service as launched.
 
-Newly generated editions use the subject `LévyQuant Morning Briefing — November 26, 2026`. Confirmation messages explain why the address received the message, what the briefing covers, its approximate New York delivery time, and the unchanged two-step confirmation and 48-hour expiry. New personalized footers distinguish confirmed subscriptions, previously authorized recipients and fixed operator archive copies; ordinary recipients see `Unsubscribe from LévyQuant`.
+Newly generated editions use the subject `Lévy Quant Morning Briefing — November 26, 2026`. Confirmation messages explain why the address received the message, what the briefing covers, its approximate New York delivery time, and the unchanged two-step confirmation and 48-hour expiry. New personalized footers distinguish confirmed subscriptions, previously authorized recipients and fixed operator archive copies; ordinary recipients see `Unsubscribe from Lévy Quant`.
 
 Coverage notes are concise and describe only the material actually cited plus genuine availability, shortening or validation omissions. The detailed service limitations above still apply; source, numeric and date checks are unchanged. This copy upgrade never rewrites frozen editions or replays accepted deliveries. Clearer copy does not guarantee inbox placement.
 

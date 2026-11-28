@@ -28,7 +28,7 @@ class SMTPDeliveryTests(unittest.TestCase):
 
     def make_message(self, **changes):
         options = dict(
-            subject="LévyQuant Daily — 宏观晨报", html="<p>Markets &amp; 量化研究</p>",
+            subject="Lévy Quant Daily — 宏观晨报", html="<p>Markets &amp; 量化研究</p>",
             text="Markets & 量化研究", sender=self.sender, recipient=self.recipient,
             edition_id="2026-11-25-morning",
         )
@@ -40,14 +40,14 @@ class SMTPDeliveryTests(unittest.TestCase):
 
     def test_prepared_message_has_one_recipient_and_utf8_alternatives(self):
         parsed = BytesParser(policy=policy.default).parsebytes(self.message.as_bytes())
-        self.assertEqual(parsed["From"].addresses[0].display_name, "LévyQuant")
+        self.assertEqual(parsed["From"].addresses[0].display_name, "Lévy Quant")
         self.assertEqual(parsed["From"].addresses[0].addr_spec, self.sender)
         self.assertEqual(parsed["To"].addresses[0].addr_spec, self.recipient)
         self.assertIsNone(parsed["Cc"])
         self.assertIsNone(parsed["Bcc"])
         self.assertIsNone(parsed["List-Unsubscribe"])
         self.assertIsNone(parsed["List-Unsubscribe-Post"])
-        self.assertEqual(str(parsed["Subject"]), "LévyQuant Daily — 宏观晨报")
+        self.assertEqual(str(parsed["Subject"]), "Lévy Quant Daily — 宏观晨报")
         self.assertEqual(parsed.get_content_type(), "multipart/alternative")
         self.assertEqual(parsed.get_body(preferencelist=("plain",)).get_content().strip(), "Markets & 量化研究")
         self.assertEqual(parsed.get_body(preferencelist=("html",)).get_content().strip(), "<p>Markets &amp; 量化研究</p>")
@@ -338,7 +338,7 @@ class SMTPSessionTests(unittest.TestCase):
         self.addCleanup(self.smtp_patch.stop)
 
     def message(self, recipient):
-        return delivery.prepare_message("LévyQuant Morning Briefing", "<p>Body</p>", "Body",
+        return delivery.prepare_message("Lévy Quant Morning Briefing", "<p>Body</p>", "Body",
                                         self.sender, recipient, "2026-11-28-morning")
 
     def test_one_login_is_reused_for_several_single_recipient_transactions(self):

@@ -16,7 +16,7 @@ from .subscriptions import REPOSITORY, SubscriptionError, service_from_env, vali
 
 _IDENTIFIER = re.compile(r"[A-Za-z0-9_-]{1,128}\Z")
 _SMTP_STAGES = frozenset({"validation", "connect", "greeting", "auth", "mail", "sender", "recipient", "data"})
-ADMIN_SUBJECT = "Your LévyQuant administrator sign-in code"
+ADMIN_SUBJECT = "Your Lévy Quant administrator sign-in code"
 
 
 def admin_service_from_env(environment):
@@ -81,10 +81,10 @@ def _send_admin_codes(service, transport, sender, password, counts):
         if datetime.now(timezone.utc) >= expires:
             counts["skipped"] += 1
             continue
-        text = ("Your LévyQuant administrator sign-in code is:\n\n" + claimed["code"]
+        text = ("Your Lévy Quant administrator sign-in code is:\n\n" + claimed["code"]
                 + "\n\nThis code expires 10 minutes after it was requested. "
                 "Do not forward or share this code. If you did not request it, ignore this message.\n")
-        html = ("<p>Your LévyQuant administrator sign-in code is:</p><p><strong>"
+        html = ("<p>Your Lévy Quant administrator sign-in code is:</p><p><strong>"
                 + claimed["code"] + "</strong></p><p>This code expires 10 minutes after it was requested. "
                 "Do not forward or share this code. If you did not request it, ignore this message.</p>")
         identity = sha256((claimed["id"] + "\0" + claimed["reservation_id"]).encode("ascii")).hexdigest()
@@ -163,8 +163,8 @@ def run(environment: dict | None = None, *, service=None, transport=None, admin_
         # recipient or token. An unexpected exception leaves it reserved.
         recipient = validate_email(claimed["email"])
         url = _confirmation_url(claimed["url"], service, claimed["id"])
-        introduction = "This email address was entered on the LévyQuant subscription page."
-        description = ("LévyQuant sends a morning briefing on macroeconomics, U.S. equities and "
+        introduction = "This email address was entered on the Lévy Quant subscription page."
+        description = ("Lévy Quant sends a morning briefing on macroeconomics, U.S. equities and "
                        "quantitative research, around 7 a.m. New York time.")
         instruction = "To subscribe, open the page below and select Confirm."
         expiry_and_choice = ("This link expires 48 hours after the request. "
@@ -174,12 +174,12 @@ def run(environment: dict | None = None, *, service=None, transport=None, admin_
             "<p>" + introduction + "</p><p>" + description + "</p><p>" + instruction + "</p>"
             '<p><a href="' + escape(url, quote=True) + '">Review and confirm subscription</a></p>'
             "<p>" + expiry_and_choice + "</p>"
-            '<p style="font-size:12px;color:#5f6368;">LévyQuant &middot; ' + escape(sender, quote=True) + "</p>"
+            '<p style="font-size:12px;color:#5f6368;">Lévy Quant &middot; ' + escape(sender, quote=True) + "</p>"
         )
         text = "\n\n".join((introduction, description, instruction,
                                "Review and confirm subscription:\n" + url,
-                               expiry_and_choice, "LévyQuant · " + sender)) + "\n"
-        message = prepare_message("Confirm your LévyQuant subscription", html, text, sender, recipient,
+                               expiry_and_choice, "Lévy Quant · " + sender)) + "\n"
+        message = prepare_message("Confirm your Lévy Quant subscription", html, text, sender, recipient,
                                   "subscription-confirm-" + claimed["id"] + "-" + claimed["reservation_id"])
         status, stage, code = _submit(transport, message, sender, password)
         service.mark_confirmation(claimed["id"], status, reservation_id=claimed["reservation_id"], stage=stage, smtp_code=code)
